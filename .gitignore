@@ -1,0 +1,33 @@
+# ===== Claude Code 工作目录 =====
+.claude-*/
+
+# ===== 日志 =====
+*.log
+
+# ===== 后端 =====
+# 真实配置不入库（含数据库密码/JWT secret），仓库提供 config.example.toml
+backend/config.toml
+# 临时验证脚本与产物（交付前清空）
+backend/.tmp-verify/
+# 编译产物（可执行文件）
+backend/liltidc-server
+backend/liltidc-server*
+backend/*.exe
+backend/tmp/
+
+# ===== 前端 =====
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.tmp-verify/
+frontend/coverage/
+frontend/*.tsbuildinfo
+frontend/eslint.config.js.timestamp-*
+
+# ===== 操作系统 / IDE =====
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

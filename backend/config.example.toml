@@ -1,0 +1,54 @@
+# LiltIDC_OEM 后端配置示例
+# 使用方法：复制本文件为 config.toml 后按需修改（config.toml 不入库）。
+# 路径可用环境变量 LILTIDC_CONFIG 覆盖（默认 ./config.toml）。
+# 注意：[database]/[brand]/[jwt].secret/[install] 会在安装向导完成时被安装器自动回写；
+#       [smtp]/[smsbao]/[brand] 仅作为安装时写入数据库 settings 表的种子值，
+#       安装完成后运行时配置以数据库为准（后台界面修改不回写本文件）。
+
+[server]
+addr = "127.0.0.1"   # 监听地址；生产环境建议保持 127.0.0.1，由 Nginx 反代
+port = 8080          # 监听端口
+mode = "debug"       # gin 模式：debug / release / test
+static_dir = ""      # 可选：前端静态产物目录（如 ../frontend/dist）；留空则后端不托管静态资源
+# CORS 跨域白名单（含协议与端口）。默认允许本机 Vite dev server；
+# 生产环境 Nginx 同域反代不依赖 CORS，若前后端分域部署，请填写真实前端源，
+# 如 ["https://idc.example.com"]。留空/不写时使用上述默认值。
+cors_allow_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[database]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = ""
+dbname = "liltidc_oem"
+charset = "utf8mb4"
+
+[jwt]
+secret = ""          # HS256 密钥；安装时若为空将自动生成随机密钥
+expire_hours = 24    # token 有效期（小时）
+
+[brand]
+site_name = "LiltIDC"
+logo = ""
+primary_color = "#2563eb"
+
+[smtp]
+host = ""
+port = 25
+username = ""
+password = ""
+from = ""
+tls = false          # true = 要求服务器支持 STARTTLS
+
+[smsbao]
+username = ""
+password_md5 = ""    # 短信宝密码的 MD5（32 位十六进制）
+sign = ""            # 短信签名，发送时自动前缀【签名】
+
+[upstream]           # 上游魔方财务（批 2 实现调用逻辑，本批仅预留配置字段）
+hostname = ""
+username = ""
+api_key = ""
+
+[install]
+installed = false    # 安装完成时由安装器置 true；置回 false 可重新进入安装态
