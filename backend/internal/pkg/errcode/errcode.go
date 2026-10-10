@@ -25,6 +25,23 @@ const (
 	CodeSMSBalanceQueryFailed = "sms_balance_query_failed"
 	CodeEmailSendFailed       = "email_send_failed"
 	CodeInternalError         = "internal_error"
+
+	// ---- 批 2：上游对接与商品域 ----
+	CodeUpstreamNotConfigured = "upstream_not_configured" // 上游地址/账号/密钥未配置
+	CodeUpstreamAuthFailed    = "upstream_auth_failed"    // 上游登录失败（账号或 API 密钥错误）
+	CodeUpstreamRequestFailed = "upstream_request_failed" // 上游请求失败（网络/超时/业务错误）
+	CodeSignatureInvalid      = "signature_invalid"       // host/sync 推送签名验证失败
+	CodeProductNotFound       = "product_not_found"       // 本地商品不存在
+
+	// ---- 批 3-α：会员域 ----
+	CodeUsernameExists    = "username_exists"     // 会员用户名已占用（注册/验证码预占场景）
+	CodeEmailExists       = "email_exists"        // 会员邮箱已占用
+	CodePhoneExists       = "phone_exists"        // 会员手机号已占用
+	CodeVerifyCodeInvalid = "verify_code_invalid" // 验证码错误或已过期
+	CodeRateLimited       = "rate_limited"        // 频控超限（HTTP 429）
+	CodeCaptchaRequired   = "captcha_required"    // 需要图形验证码
+	CodeCaptchaInvalid    = "captcha_invalid"     // 图形验证码错误/过期（校验即焚）
+	CodeClientNotFound    = "client_not_found"    // 会员不存在
 )
 
 // BizError 是携带 HTTP 状态码与字符串错误码的业务错误。

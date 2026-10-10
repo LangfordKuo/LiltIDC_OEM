@@ -23,6 +23,9 @@ const AdminLayout = lazy(() => import("@/pages/admin/layout"))
 const DashboardPage = lazy(() => import("@/pages/admin/dashboard"))
 const PlaceholderPage = lazy(() => import("@/pages/admin/placeholder"))
 const SettingsPage = lazy(() => import("@/pages/admin/settings"))
+const ProductsPage = lazy(() => import("@/pages/admin/products"))
+const UpstreamPage = lazy(() => import("@/pages/admin/upstream"))
+const MembersPage = lazy(() => import("@/pages/admin/members"))
 
 /** 懒加载路由的过渡占位。 */
 function RouteFallback() {
@@ -54,11 +57,12 @@ export function AppRoutes() {
           }
         >
           <Route index element={<DashboardPage />} />
-          <Route path="products" element={<PlaceholderPage titleKey="nav.products" />} />
+          <Route path="products" element={<ProductsPage />} />
           <Route path="orders" element={<PlaceholderPage titleKey="nav.orders" />} />
-          <Route path="members" element={<PlaceholderPage titleKey="nav.members" />} />
+          <Route path="members" element={<MembersPage />} />
           <Route path="tickets" element={<PlaceholderPage titleKey="nav.tickets" />} />
           <Route path="finance" element={<PlaceholderPage titleKey="nav.finance" />} />
+          <Route path="upstream" element={<UpstreamPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<NotFoundPage />} />

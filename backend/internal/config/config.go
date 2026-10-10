@@ -92,6 +92,9 @@ func BuildDSN(host string, port int, user, password, dbname, charset string) str
 type JWTConfig struct {
 	Secret      string `toml:"secret"`
 	ExpireHours int    `toml:"expire_hours"`
+	// ClientExpireHours 是会员 token 有效期（批 3-α；会员 JWT 用独立 issuer
+	// liltidc-oem-client 与管理员隔离，密钥复用 Secret）
+	ClientExpireHours int `toml:"client_expire_hours"`
 }
 
 // BrandConfig 是品牌信息（未安装态的来源；安装后作为 settings 表种子）。
@@ -118,11 +121,14 @@ type SmsbaoConfig struct {
 	Sign        string `toml:"sign"`
 }
 
-// UpstreamConfig 是上游魔方财务的预留配置（批 2 实现调用逻辑）。
+// UpstreamConfig 是上游魔方财务的配置（批 2 起生效）。
+// 注意：运行时真源是数据库 settings 表（后台界面可改），此处仅作为
+// 安装/启动时的种子值（settings 对应键为空时写入），见 ADR-019。
 type UpstreamConfig struct {
-	Hostname string `toml:"hostname"`
-	Username string `toml:"username"`
-	APIKey   string `toml:"api_key"`
+	Hostname       string `toml:"hostname"`
+	Username       string `toml:"username"`
+	APIKey         string `toml:"api_key"`
+	TimeoutSeconds int    `toml:"timeout_seconds"` // 单次上游请求超时，默认 15 秒
 }
 
 // InstallConfig 是安装状态标记（持久化真源，见 docs/architecture.md ADR-004）。
@@ -181,6 +187,9 @@ func (c *Config) applyDefaults() {
 	if c.JWT.ExpireHours <= 0 {
 		c.JWT.ExpireHours = 24
 	}
+	if c.JWT.ClientExpireHours <= 0 {
+		c.JWT.ClientExpireHours = 24
+	}
 	if c.Brand.SiteName == "" {
 		c.Brand.SiteName = "LiltIDC"
 	}
@@ -189,6 +198,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SMTP.Port == 0 {
 		c.SMTP.Port = 25
+	}
+	if c.Upstream.TimeoutSeconds <= 0 {
+		c.Upstream.TimeoutSeconds = 15
 	}
 }
 

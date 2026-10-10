@@ -24,8 +24,9 @@ dbname = "liltidc_oem"
 charset = "utf8mb4"
 
 [jwt]
-secret = ""          # HS256 密钥；安装时若为空将自动生成随机密钥
-expire_hours = 24    # token 有效期（小时）
+secret = ""               # HS256 密钥；安装时若为空将自动生成随机密钥
+expire_hours = 24         # 管理员 token 有效期（小时）
+client_expire_hours = 24  # 会员 token 有效期（小时，批 3-α；会员 JWT 独立 issuer）
 
 [brand]
 site_name = "LiltIDC"
@@ -45,10 +46,13 @@ username = ""
 password_md5 = ""    # 短信宝密码的 MD5（32 位十六进制）
 sign = ""            # 短信签名，发送时自动前缀【签名】
 
-[upstream]           # 上游魔方财务（批 2 实现调用逻辑，本批仅预留配置字段）
-hostname = ""
-username = ""
-api_key = ""
+[upstream]           # 上游魔方财务（批 2 起生效）
+# 注意：运行时真源是数据库 settings（后台「上游对接」页可改），
+# 此处仅作为安装/启动时的种子值（settings 对应键为空时写入，不覆盖后台修改）。
+hostname = ""        # 上游站点地址，如 https://lyew.com
+username = ""        # 上游账号（手机号不加 +86/86 区号，加了会鉴权失败）
+api_key = ""         # 上游 API 密钥（登录密码）
+timeout_seconds = 15 # 单次上游请求超时（秒）
 
 [install]
 installed = false    # 安装完成时由安装器置 true；置回 false 可重新进入安装态

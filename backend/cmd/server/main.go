@@ -24,6 +24,7 @@ import (
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/notify"
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/pkg/app"
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/router"
+	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/upstream"
 )
 
 // Version 是后端版本号（/api/healthz 暴露）。
@@ -61,8 +62,14 @@ func run() error {
 			slog.Error("数据库自动迁移失败", "err", err)
 			return fmt.Errorf("数据库自动迁移失败: %w", err)
 		}
+		// 批 2：config.toml [upstream] 种子进 settings（仅当键不存在，不覆盖后台修改）
+		if err := migration.SeedUpstreamFromConfig(db, cfg.Upstream); err != nil {
+			slog.Warn("上游配置种子写入失败（不影响启动，可后台手工配置）", "err", err)
+		}
 		a.DB.Store(db)
 		a.Notify.Store(notify.NewManager(db))
+		a.Upstream.Store(upstream.NewSessionManager(db,
+			time.Duration(cfg.Upstream.TimeoutSeconds)*time.Second))
 		slog.Info("数据库已连接并完成迁移检查",
 			"host", cfg.Database.Host, "dbname", cfg.Database.DBName)
 	} else {

@@ -126,6 +126,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.JWT.ExpireHours != 24 {
 		t.Errorf("jwt 默认值错误: %+v", cfg.JWT)
 	}
+	if cfg.JWT.ClientExpireHours != 24 {
+		t.Errorf("jwt client_expire_hours 默认值错误: %+v", cfg.JWT)
+	}
 	if cfg.Brand.SiteName != "LiltIDC" || cfg.Brand.PrimaryColor != "#2563eb" {
 		t.Errorf("brand 默认值错误: %+v", cfg.Brand)
 	}

@@ -30,7 +30,7 @@ import { api, clearToken, type AdminInfo } from "@/lib/api"
 import { useBrand } from "@/lib/brand"
 import { cn } from "@/lib/utils"
 
-import { navItems } from "./nav"
+import { navSections } from "./nav"
 
 export default function AdminLayout() {
   const { t } = useTranslation()
@@ -148,25 +148,36 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       <div className="flex h-14 shrink-0 items-center border-b px-4">
         <SiteLogo />
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-              )
-            }
-          >
-            <item.icon className="size-4 shrink-0" />
-            <span className="truncate">{t(item.i18nKey)}</span>
-          </NavLink>
+      <nav className="flex-1 overflow-y-auto p-3">
+        {navSections.map((section, si) => (
+          <div key={si} className={si > 0 ? "mt-5" : undefined}>
+            {section.titleKey && (
+              <p className="mb-1.5 px-3 text-xs font-medium text-muted-foreground">
+                {t(section.titleKey)}
+              </p>
+            )}
+            <div className="space-y-1">
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  onClick={onNavigate}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    )
+                  }
+                >
+                  <item.icon className="size-4 shrink-0" />
+                  <span className="truncate">{t(item.i18nKey)}</span>
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
       <div className="shrink-0 border-t p-3">

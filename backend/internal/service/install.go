@@ -25,6 +25,7 @@ import (
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/notify"
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/pkg/app"
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/pkg/errcode"
+	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/upstream"
 )
 
 // 安装参数校验用的正则（同时兜底防 SQL/反引号注入）。
@@ -222,6 +223,8 @@ func (s *InstallService) Complete(ctx context.Context, req *InstallRequest) (*In
 	s.app.SetCfg(&newCfg)
 	s.app.DB.Store(db)
 	s.app.Notify.Store(notify.NewManager(db))
+	s.app.Upstream.Store(upstream.NewSessionManager(db,
+		time.Duration(newCfg.Upstream.TimeoutSeconds)*time.Second))
 	s.app.Installed.Store(true)
 	slog.Info("安装完成，系统已切换为已安装态", "admin_id", admin.ID, "dbname", dbCfg.DBName, "mysql_version", version)
 
@@ -270,6 +273,10 @@ func (s *InstallService) seed(db *gorm.DB, req *InstallRequest) error {
 		model.SettingSMTPPassword:      cfg.SMTP.Password,
 		model.SettingSMTPFrom:          cfg.SMTP.From,
 		model.SettingSMTPTLS:           strconv.FormatBool(cfg.SMTP.TLS),
+		// 批 2：上游魔方财务凭据种子（运行时真源为 settings，见 ADR-019）
+		model.SettingUpstreamHostname: cfg.Upstream.Hostname,
+		model.SettingUpstreamUsername: cfg.Upstream.Username,
+		model.SettingUpstreamAPIKey:   cfg.Upstream.APIKey,
 	}
 	if err := migration.SeedSettings(db, kvs); err != nil {
 		return err

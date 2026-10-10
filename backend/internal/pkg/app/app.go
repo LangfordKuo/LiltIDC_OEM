@@ -14,6 +14,7 @@ import (
 
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/config"
 	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/notify"
+	"github.com/LangfordKuo/LiltIDC_OEM/backend/internal/upstream"
 )
 
 // App 是运行时容器。
@@ -27,6 +28,7 @@ type App struct {
 	Installed atomic.Bool
 	DB        atomic.Pointer[gorm.DB]
 	Notify    atomic.Pointer[notify.Manager]
+	Upstream  atomic.Pointer[upstream.SessionManager] // 批 2：上游会话管理（settings 真源 + jwt 缓存复用）
 
 	installMu sync.Mutex // 安装互斥：防并发 complete 造成双写
 }
@@ -62,6 +64,11 @@ func (a *App) GetDB() *gorm.DB {
 // GetNotify 返回通知管理器；未安装时为 nil（调用方须判空）。
 func (a *App) GetNotify() *notify.Manager {
 	return a.Notify.Load()
+}
+
+// GetUpstream 返回上游会话管理器；未安装时为 nil（调用方须判空）。
+func (a *App) GetUpstream() *upstream.SessionManager {
+	return a.Upstream.Load()
 }
 
 // InstallLock 获取安装互斥锁，返回解锁函数（防并发安装）。

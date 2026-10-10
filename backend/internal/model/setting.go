@@ -35,6 +35,12 @@ const (
 	SettingSMTPPassword = "smtp_password"
 	SettingSMTPFrom     = "smtp_from"
 	SettingSMTPTLS      = "smtp_tls"
+
+	// ---- 批 2：上游对接（运行时真源，config.toml [upstream] 仅种子，见 ADR-019） ----
+	SettingUpstreamHostname = "upstream_hostname" // 上游站点地址，如 https://lyew.com
+	SettingUpstreamUsername = "upstream_username" // 上游账号（手机号不加区号）
+	SettingUpstreamAPIKey   = "upstream_api_key"  // 上游 API 密钥（登录密码）
+	SettingDownstreamToken  = "downstream_token"  // 下游密钥：上游 host/sync 推送验签用
 )
 
 // GetSetting 读取单个设置；键不存在时返回 ("", false, nil)。

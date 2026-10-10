@@ -35,6 +35,11 @@ func New(a *app.App) *gin.Engine {
 	brandH := handler.NewBrand(service.NewBrand(a))
 	healthH := handler.NewHealth(a)
 	notifyH := handler.NewNotify(service.NewNotify(a))
+	upstreamH := handler.NewUpstream(service.NewUpstream(a))
+	productH := handler.NewProduct(service.NewProduct(a))
+	hostSyncH := handler.NewHostSync(service.NewHostSync(a))
+	verifySvc := service.NewVerify(a)
+	clientH := handler.NewClient(service.NewClient(a, verifySvc), verifySvc)
 
 	// ---- 公共接口（未安装态白名单，见契约文档 0.5） ----
 	r.GET("/api/healthz", healthH.Health)
@@ -45,6 +50,17 @@ func New(a *app.App) *gin.Engine {
 
 	// ---- 认证（受未安装门禁保护，无需 JWT） ----
 	r.POST("/api/auth/login", authH.Login)
+
+	// ---- 会员前台·免鉴权（批 3-α，契约第 12 章；受未安装门禁保护） ----
+	r.GET("/api/client/captcha", clientH.Captcha)
+	r.POST("/api/client/auth/send-code", clientH.SendCode)
+	r.POST("/api/client/auth/register", clientH.Register)
+	r.POST("/api/client/auth/login", clientH.Login)
+
+	// ---- 上游 → 下游主机推送（批 2，契约 9.6） ----
+	// 免 JWT（上游服务器调用），以魔方标准 MD5 签名验证代替登录态；
+	// 注意：不在未安装门禁白名单内——未安装态直接 409（安全模型见契约文档）。
+	r.POST("/api/upstream/host/sync", hostSyncH.Sync)
 
 	// ---- 管理后台（需 JWT 认证） ----
 	authed := r.Group("/api", middleware.AuthRequired(a))
@@ -59,6 +75,38 @@ func New(a *app.App) *gin.Engine {
 		authed.GET("/admin/notify/sms-balance", notifyH.SMSBalance)
 		authed.GET("/admin/notify/templates", notifyH.ListTemplates)
 		authed.PUT("/admin/notify/templates/:id", notifyH.UpdateTemplate)
+
+		// 上游对接（批 2，契约第 9 章；只读端点 + 商品导入，不开订单写操作）
+		authed.GET("/admin/upstream/config", upstreamH.GetConfig)
+		authed.PUT("/admin/upstream/config", upstreamH.SaveConfig)
+		authed.POST("/admin/upstream/test", upstreamH.Test)
+		authed.GET("/admin/upstream/credit", upstreamH.GetCredit)
+		authed.POST("/admin/upstream/downstream-token/reset", upstreamH.ResetDownstreamToken)
+		authed.GET("/admin/upstream/products", upstreamH.GetProducts)
+		authed.GET("/admin/upstream/products/stock", upstreamH.GetStock)
+		authed.POST("/admin/upstream/products/import", upstreamH.ImportProducts)
+		authed.GET("/admin/upstream/hosts", upstreamH.GetUpstreamHosts)
+
+		// 本地商品管理（批 2，契约第 10 章）
+		authed.GET("/admin/products", productH.List)
+		authed.GET("/admin/product-groups", productH.ListGroups)
+		authed.PUT("/admin/products/:id", productH.Update)
+		authed.PUT("/admin/products/:id/status", productH.UpdateStatus)
+		authed.POST("/admin/products/sync-stock", productH.SyncStock)
+
+		// 会员管理（批 3-α，契约 12.6）
+		authed.GET("/admin/clients", clientH.AdminList)
+		authed.PUT("/admin/clients/:id/status", clientH.AdminSetStatus)
+		authed.POST("/admin/clients/:id/reset-password", clientH.AdminResetPassword)
+		authed.DELETE("/admin/clients/:id", clientH.AdminDelete)
+	}
+
+	// ---- 会员前台·需会员 JWT（issuer 隔离，管理员 token 无效） ----
+	clientAuthed := r.Group("/api/client", middleware.ClientAuthRequired(a))
+	{
+		clientAuthed.GET("/profile", clientH.Profile)
+		clientAuthed.PUT("/profile", clientH.UpdateProfile)
+		clientAuthed.POST("/change-password", clientH.ChangePassword)
 	}
 
 	// ---- 静态资源与 404 ----

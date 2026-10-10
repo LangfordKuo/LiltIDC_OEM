@@ -9,7 +9,10 @@ import { MemoryRouter } from "react-router-dom"
 import i18n, { i18nReady } from "@/i18n"
 import zhCN from "@/i18n/locales/zh-CN.json"
 import AdminLayout from "@/pages/admin/layout"
+import MembersPage from "@/pages/admin/members"
+import ProductsPage from "@/pages/admin/products"
 import SettingsPage from "@/pages/admin/settings"
+import UpstreamPage from "@/pages/admin/upstream"
 import Home from "@/pages/home"
 import InstallPage from "@/pages/install"
 import LoginPage from "@/pages/login"
@@ -18,7 +21,7 @@ import LoginPage from "@/pages/login"
 const RAW_KEY_PATTERN = /\b[a-z]+\.[a-zA-Z]+\b/g
 
 // 扫描白名单：语言无关的域名/格式示例，形似 key 但不是 i18n key
-const RAW_KEY_ALLOWLIST = ["smsbao.com"]
+const RAW_KEY_ALLOWLIST = ["smsbao.com", "lyew.com"]
 
 function renderWithProviders(ui: ReactNode, route = "/") {
   return render(<MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>)
@@ -45,32 +48,71 @@ beforeAll(async () => {
   await i18n.changeLanguage("zh-CN")
 })
 
+/** 构造统一响应体 JSON Response。 */
+function jsonResponse(data: unknown, status = 200) {
+  const body =
+    status === 200
+      ? { status: 200, msg: "ok", data }
+      : { status, code: "not_found", msg: "not found" }
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  })
+}
+
 beforeEach(() => {
-  // stub 全局 fetch：AdminLayout 挂载时会请求 /api/auth/me（vitest 配置了
+  // stub 全局 fetch：各页面挂载时的数据请求（vitest 配置了
   // unstubGlobals，需在每个用例前重新 stub）
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes("/api/auth/me")) {
-        return new Response(
-          JSON.stringify({
-            status: 200,
-            msg: "ok",
-            data: {
-              id: 1,
-              username: "admin",
-              real_name: "郭政皓",
-              email: "admin@example.com",
-              last_login_at: null,
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        )
+        return jsonResponse({
+          id: 1,
+          username: "admin",
+          real_name: "郭政皓",
+          email: "admin@example.com",
+          last_login_at: null,
+        })
       }
-      return new Response(JSON.stringify({ status: 404, code: "not_found", msg: "not found" }), {
-        status: 404,
-      })
+      if (url.includes("/api/admin/upstream/config")) {
+        return jsonResponse({
+          hostname: "https://lyew.com",
+          username: "16650492239",
+          api_key_set: true,
+          downstream_token: "tok-test-0123456789abcdef",
+          sync_path: "/api/upstream/host/sync",
+        })
+      }
+      if (url.includes("/api/admin/products")) {
+        return jsonResponse({ list: [], total: 0 })
+      }
+      if (url.includes("/api/admin/product-groups")) {
+        return jsonResponse({ list: [] })
+      }
+      if (url.includes("/api/admin/clients")) {
+        return jsonResponse({
+          list: [
+            {
+              id: 1,
+              username: "member01",
+              email: "m1@example.com",
+              phone: "13800138000",
+              real_name: "测试会员",
+              company: "",
+              status: 3,
+              status_text: "上游关联异常",
+              upstream_uid: null,
+              upstream_linked_at: "",
+              last_login_at: "",
+              created_at: "2026-10-10 12:00:00",
+            },
+          ],
+          total: 1,
+        })
+      }
+      return jsonResponse(null, 404)
     }),
   )
 })
@@ -135,6 +177,45 @@ describe("后台布局 /admin", () => {
       expect(container.textContent).toContain(zhCN.nav[key])
     }
     expect(container.textContent).toContain(zhCN.topbar.adminPanel)
+    expectNoRawKeys(container)
+  })
+})
+
+describe("上游对接页 /admin/upstream（三个页签）", () => {
+  it("渲染页签与上游配置表单译文，且无未翻译 key", async () => {
+    const { container } = renderWithProviders(<UpstreamPage />, "/admin/upstream")
+    expect(screen.getByText(zhCN.upstream.title)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.upstream.tabs.config)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.upstream.tabs.push)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.upstream.tabs.hosts)).toBeInTheDocument()
+    // 等待异步配置加载落地（stub 返回 api_key_set=true → 徽章「已设置」）
+    expect(await screen.findByText(zhCN.upstream.config.apiKeySet)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.upstream.config.description)).toBeInTheDocument()
+    expectNoRawKeys(container)
+  })
+})
+
+describe("商品管理页 /admin/products", () => {
+  it("渲染工具栏与表格译文，且无未翻译 key", async () => {
+    const { container } = renderWithProviders(<ProductsPage />, "/admin/products")
+    expect(screen.getByText(zhCN.products.title)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.products.import)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.products.syncStock)).toBeInTheDocument()
+    // 等待异步列表落地（stub 返回空列表 → 空态文案）
+    expect(await screen.findByText(zhCN.products.empty)).toBeInTheDocument()
+    expectNoRawKeys(container)
+  })
+})
+
+describe("会员管理页 /admin/members", () => {
+  it("渲染列表与状态徽章（含上游关联异常），且无未翻译 key", async () => {
+    const { container } = renderWithProviders(<MembersPage />, "/admin/members")
+    expect(screen.getByText(zhCN.members.title)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.members.search)).toBeInTheDocument()
+    // 等待异步列表落地（stub 返回 1 位 status=3 的会员）
+    expect(await screen.findByText("member01")).toBeInTheDocument()
+    expect(screen.getByText("上游关联异常")).toBeInTheDocument()
+    expect(screen.getByText(zhCN.members.neverLogin)).toBeInTheDocument()
     expectNoRawKeys(container)
   })
 })

@@ -49,16 +49,38 @@ func OpenDSN(dsn string) (*gorm.DB, error) {
 	return db, nil
 }
 
-// AutoMigrate 建表（幂等：已存在的表只做增量列同步）。
+// AutoMigrate 建表（幂等：已存在的表只做增量列同步；批 2 起含商品与主机表）。
 func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&model.Admin{},
 		&model.Setting{},
 		&model.NotifyTemplate{},
+		// ---- 批 2：上游对接与商品域（对已安装库为增量建表，不动已有数据） ----
+		&model.ProductGroup{},
+		&model.Product{},
+		&model.Host{},
+		// ---- 批 3-α：会员域 ----
+		&model.Client{},
 	); err != nil {
 		return fmt.Errorf("AutoMigrate 失败: %w", err)
 	}
 	return nil
+}
+
+// SeedUpstreamFromConfig 把 config.toml [upstream] 种子进 settings（仅当键不存在时写入，
+// 不覆盖后台已保存的值）。启动与安装完成时调用，见 ADR-019。
+func SeedUpstreamFromConfig(db *gorm.DB, cfg config.UpstreamConfig) error {
+	kvs := make(map[string]string)
+	if cfg.Hostname != "" {
+		kvs[model.SettingUpstreamHostname] = cfg.Hostname
+	}
+	if cfg.Username != "" {
+		kvs[model.SettingUpstreamUsername] = cfg.Username
+	}
+	if cfg.APIKey != "" {
+		kvs[model.SettingUpstreamAPIKey] = cfg.APIKey
+	}
+	return SeedSettings(db, kvs)
 }
 
 // SeedSettings 种子写入 settings：仅当键不存在时写入（不覆盖后台已修改的值）。
