@@ -88,6 +88,13 @@
 | `captcha_required` | 400 | 需要图形验证码（同 IP 当日发送 ≥5 条后强制）（批 3-α） |
 | `captcha_invalid` | 400 | 图形验证码错误或已过期（校验即焚）（批 3-α） |
 | `client_not_found` | 404 | 会员不存在（批 3-α） |
+| `balance_insufficient` | 400 | 余额不足：支付/人工扣款拒绝（行锁内校验，绝不透支）（批 3-β） |
+| `order_not_found` | 404 | 订单不存在，或不属于当前会员（防枚举统一按不存在）（批 3-β） |
+| `order_state_invalid` | 400 | 订单状态机非法迁移：支付非 Pending 单/取消已支付单/重试非 ProvisionFailed 单等（批 3-β） |
+| `product_off_sale` | 400 | 商品已下架（下单拒绝）（批 3-β） |
+| `stock_insufficient` | 400 | 库存不足（stock_control 商品下单时实时查上游 proinfo）（批 3-β） |
+| `cycle_unavailable` | 400 | 所选计费周期未配置售价或售价非法（批 3-β） |
+| `pay_method_unsupported` | 400 | 支付方式不支持（本批仅 `balance`；易支付批 4）（批 3-β） |
 
 ### 0.5 未安装门禁
 
@@ -645,13 +652,15 @@ func (m *Manager) Send(ctx context.Context, scene, channel, lang, receiver strin
   "username": "16650492239",
   "api_key_set": true,
   "downstream_token": "<64位hex>",
-  "sync_path": "/api/upstream/host/sync"
+  "sync_path": "/api/upstream/host/sync",
+  "site_url": "https://idc.example.com"
 }
 ```
 
   - `api_key` **不回显明文**（只回 `api_key_set`，范式同 notify password_set）；
-  - `downstream_token` 为空时**首次 GET 自动生成并落库**（懒初始化）。
-- `PUT /api/admin/upstream/config`，body `{"hostname","username","api_key"}`；`api_key` 留空 = 不修改；hostname 须为 http/https 完整 URL（存储时去尾部 `/`）；保存后缓存的上游会话立即失效重建。响应 `data: {"saved": true}`。错误码：`invalid_param`。
+  - `downstream_token` 为空时**首次 GET 自动生成并落库**（懒初始化）；
+  - `site_url`（批 3-β 新增）：本站对外地址，开通后 `/host/setdownstream` 登记的 `downstream_url`；空 = 回退后端监听地址 `http://<addr>:<port>`（本机部署上游推送不可达属预期，登记失败只记日志）。
+- `PUT /api/admin/upstream/config`，body `{"hostname","username","api_key","site_url"}`；`api_key` 留空 = 不修改；`site_url` 为可选字段（缺省不修改；提交时须为 http/https 完整 URL）；hostname 须为 http/https 完整 URL（存储时去尾部 `/`）；保存后缓存的上游会话立即失效重建。响应 `data: {"saved": true}`。错误码：`invalid_param`。
 
 ### 9.2 重置下游密钥
 
@@ -744,7 +753,8 @@ func (m *Manager) Send(ctx context.Context, scene, channel, lang, receiver strin
 - **签名算法（逐字实现）**：取 `{id, token, rand_str}` 三字段 → 按键名 ksort（字符串序，即 `id` < `rand_str` < `token`）→ JSON 序列化（紧凑无空格、键序为排序后顺序）→ MD5 → **转大写** → 与 `signature` 全等比对（常数时间比较）。`token` = 本系统 `downstream_token`（9.1/9.2 管理）。示例签名材料：`{"id":"12","rand_str":"r4nd","token":"tk"}`。`id` 取推送体原文（数字 12 与字符串 "12" 等价）。
 - 处理：验签 → 按 `host_id` upsert `hosts` 表（更新时保留 product_id/client_id 关联）→ raw 原文备份 → 返回 200。字段缺失容错（宽松转换，记日志）。
 - 响应：成功 `{"status":200,"msg":"ok","data":{"received":true}}`；验签失败 `403 {"code":"signature_invalid"}`；host_id 缺失/非法 `400 invalid_param`；token 未配置 `403 signature_invalid`（msg 提示先在后台生成）。
-- 「把回调地址/token 自动登记到上游」（上游 /host/setdownstream）留批 3 下单链路实现；本批由管理员在上游后台手工登记（前端展示完整回调 URL 与复制按钮）。
+- 「把回调地址/token 自动登记到上游」批 3-β 已实现：订单开通成功后自动调上游 `POST /host/setdownstream` 登记（见 13.8），失败只记日志不阻断；管理员仍可在上游后台手工登记兜底（前端展示完整回调 URL 与复制按钮）。
+- **推送密钥派生（批 3-β）**：上游 `setdownstream`/`settle` 对 `downstream_token` 有 `strlen==32` 硬校验，而本系统生成的是 64 位 hex——登记与验签两侧统一用**派生规则**收敛：`token 长度 > 32 时取前 32 位，否则原样`（`upstream.PushToken32`）。验签端按变体列表 `[派生32位, 完整token]` 依次尝试（兼容管理员手工登记全文的旧形态），任一通过即放行。
 
 ---
 
@@ -783,17 +793,17 @@ func (m *Manager) Send(ctx context.Context, scene, channel, lang, receiver strin
 
 ---
 
-## 11. 预留章节（后续批次追加，本批不实现）
+## 11. 预留章节（后续批次追加）
 
-| 章节 | 功能域 | 路由前缀（规划） |
-|---|---|---|
-| 13 | 会员前台商品/下单 | `/api/products`、`/api/orders` |
-| 14 | 订单域（后台） | `/api/admin/orders` |
-| 15 | 计费域（账单/周期） | `/api/billing`、`/api/admin/billing` |
-| 16 | 支付域（网关/回调） | `/api/payment` |
-| 17 | 工单域 | `/api/tickets`、`/api/admin/tickets` |
-| 18 | 上游写操作（下单/开通/续费/退款转发） | `/api/admin/upstream`（扩展） |
-| 19 | 管理后台其余设置 | `/api/admin/settings` |
+| 章节 | 功能域 | 路由前缀（规划） | 状态 |
+|---|---|---|---|
+| 13 | 订单域（商城前台 + 会员/后台订单 + 开通转发） | `/api/store`、`/api/client/orders`、`/api/admin/orders` | **批 3-β 已实现** |
+| 14 | 余额域（人工调账 + 流水 + 余额支付） | `/api/client/balance`、`/api/admin/clients/:id/balance` | **批 3-β 已实现** |
+| 15 | 计费域（账单/周期） | `/api/billing`、`/api/admin/billing` | 预留 |
+| 16 | 支付域（网关/回调，易支付） | `/api/payment` | 预留（批 4） |
+| 17 | 工单域 | `/api/tickets`、`/api/admin/tickets` | 预留 |
+| 18 | 上游写操作扩展（续费/退款/重装转发） | `/api/admin/upstream`（扩展） | 部分随批 3-β 落地（下单/开通，见 13.8） |
+| 19 | 管理后台其余设置 | `/api/admin/settings` | 预留 |
 
 ---
 
@@ -932,4 +942,218 @@ func (m *Manager) Send(ctx context.Context, scene, channel, lang, receiver strin
 
 > 新增错误码（并入 0.4 总表）：`username_exists`(400)、`email_exists`(400)、`phone_exists`(400)、`verify_code_invalid`(400)、`rate_limited`(429)、`captcha_required`(400)、`captcha_invalid`(400)、`client_not_found`(404)。
 
-> 路由分层约定：`/api/admin/*` = 管理后台（管理员 JWT）；`/api/client/*` = 会员前台（会员 JWT，批 3+）；`/api/public/*` = 免鉴权公共接口；`/api/upstream/*` = 上游回调（签名验证，免 JWT）；`/api/*` 其余为安装/认证等特殊域。
+> 路由分层约定：`/api/admin/*` = 管理后台（管理员 JWT）；`/api/client/*` = 会员前台（会员 JWT，批 3+）；`/api/store/*` = 商城公开只读（免鉴权，批 3-β）；`/api/public/*` = 免鉴权公共接口；`/api/upstream/*` = 上游回调（签名验证，免 JWT）；`/api/*` 其余为安装/认证等特殊域。
+
+---
+
+## 13. 订单域 `/api/store`、`/api/client/orders|hosts`、`/api/admin/orders`（批 3-β）
+
+> 商城前台接口（13.1）公开免鉴权（受未安装门禁保护，可匿名浏览）；
+> `/api/client/*` 需会员 JWT（issuer `liltidc-oem-client`）；`/api/admin/orders` 需管理员 JWT。
+> 形态取舍：本批为**单商品「立即购买」**（每单固定 1 个条目，qty 1-10），购物车留批 4（ADR-026）；
+> 支付方式本批仅 `balance`（余额），易支付留批 4。
+
+### 13.1 商城前台（公开）
+
+- `GET /api/store/products` → `data: {"groups":[StoreGroup]}`；StoreGroup：
+
+```json
+{ "id": 1, "name": "二区 CN2标准性能", "products": [
+  { "id": 1, "name": "香港二区 CN2 A型",
+    "description": "<li>CPU:2核心</li>", "type": "dcimcloud",
+    "group_id": 1, "group_name": "二区 CN2标准性能",
+    "sale_prices": {"monthly":"30.00","annually":"300.00"},
+    "price_from": "30.00", "stock_qty": 72, "stock_control": true, "in_stock": true }
+] }
+```
+
+  - 只含**上架**商品与**启用**分组（空分组不输出）；`price_from` = 各周期最低售价（整数分比较，无浮点）；
+  - `in_stock` = `!stock_control || stock_qty > 0`（列表用本地快照；下单时才实时查上游）；
+  - ⚠ `description` 是上游 HTML 原文——**前端渲染前必须 sanitize**（dompurify 白名单，见前端 `lib/html.ts`；列表页仅提取纯文本摘要）。
+- `GET /api/store/products/:id` → data 为 StoreProduct 增补 `{ "cycles": ["monthly","annually"] }`（cycles = 有售价的周期键，后端按规范序排好）。下架/不存在统一 404 `product_not_found`（防探测）。
+
+### 13.2 会员下单
+
+- `POST /api/client/orders`（会员 JWT），body `{ "product_id": 1, "cycle": "monthly", "qty": 1 }`：
+  - 校验：qty ∈ [1,10]（`invalid_param`）；商品存在且上架（404 `product_not_found` / 400 `product_off_sale`）；周期有售价（400 `cycle_unavailable`）；`stock_control` 商品**实时查上游 proinfo**（上游不可用时回退本地 stock_qty 快照并记日志；不足 → 400 `stock_insufficient`）；
+  - 按**当前售价**生成快照：`unit_price` = sale_prices[cycle]，`amount` = unit_price × qty（整数分运算）；
+  - 订单号 `order_no` = `LIO` + `YYYYMMDD` + 4 位日内序号（如 `LIO202610100001`；唯一索引兜底并发冲突自动重取）。
+- → data 为 OrderView（13.4），初始 `status=Pending`。
+
+### 13.3 支付 / 取消 / 列表 / 详情
+
+- `POST /api/client/orders/:id/pay`，body `{"method":"balance"}`（method 可省略，默认 balance）：
+  - 单事务：**锁订单行（FOR UPDATE）→ 校验归属与 Pending 态 → 锁会员行 → 校验余额 → 扣减 + consume 流水 → 订单转 Paid**（并发防透支见 14.5）；
+  - 提交后**异步**触发开通转发（13.8），接口立即返回 OrderView（status=Paid）；
+  - 错误码：`order_not_found`(404，含他人订单) / `order_state_invalid`(400) / `balance_insufficient`(400) / `pay_method_unsupported`(400，method≠balance)。
+- `POST /api/client/orders/:id/cancel`（无 body）：仅 Pending 可取消 → `Cancelled` + cancel_time（未支付无退款）；其余状态 400 `order_state_invalid`。
+- `GET /api/client/orders?status=&page=&page_size=` → `data: {"list":[OrderView],"total":N,"page":1,"page_size":20}`（只查自己的单；status 非法值 → `invalid_param`）。
+- `GET /api/client/orders/:id` → OrderView（他人订单 404 `order_not_found`）。
+
+### 13.4 订单状态机与 OrderView
+
+```
+Pending ──余额支付──▶ Paid ──全部条目开通成功──▶ Active（终态）
+Pending ──超时24h/手动取消──▶ Cancelled（终态，未支付无退款）
+Paid ──上游明确业务拒绝（余额不足/下架等）──▶ Refunded（终态，本地余额自动原路退回）
+Paid ──开通超时/失败、上游网络性失败──▶ ProvisionFailed（款不动，待人工）
+ProvisionFailed ──后台重试开通──▶ Paid（重新进入开通流程）
+ProvisionFailed ──重试后开通成功──▶ Active
+ProvisionFailed ──后台取消并退款──▶ Refunded
+```
+
+白名单外迁移一律拒绝（服务层与 worker 双侧强制，`model.CanTransition`；单测覆盖）。**Paid 后会员不可取消**（在线退款留批 4）。
+
+OrderView：
+
+```json
+{ "id": 1, "order_no": "LIO202610100001", "client_id": 1, "client_username": "member01",
+  "status": "Paid", "status_text": "开通中",
+  "amount": "30.00", "balance_used": "30.00", "pay_method": "balance",
+  "pay_time": "2026-10-10 12:00:00", "cancel_time": "", "remark": "",
+  "created_at": "2026-10-10 11:59:00",
+  "items": [ { "id": 1, "product_id": 1, "product_name": "香港二区 CN2 A型",
+    "upstream_pid": 1, "cycle": "monthly", "cycle_text": "月付",
+    "qty": 1, "unit_price": "30.00", "amount": "30.00",
+    "upstream_order_id": 321, "upstream_host_id": 456,
+    "provision_status": "provisioning", "provision_status_text": "开通中",
+    "provision_info": { "hostname": "HK-LILT01", "host_ids": [456] } } ] }
+```
+
+  - `client_username` 仅后台接口输出；`status_text`/`cycle_text`/`provision_status_text` 按请求头 `Accept-Language` 输出（zh/en）；
+  - `provision_status` 枚举：`pending`（未开始）/ `provisioning`（上游已受理，轮询中）/ `active`（开通成功）/ `failed`（失败）；
+  - `provision_info` 是 JSON 对象（可 null），字段全部可选：`hostname`/`password`（下单生成并提交上游的主机名/密码）、`currency_id`、`host_ids`（上游主机 ID 全集，qty>1 多台）、`ip`/`assigned_ips`/`username`/`host_password`/`next_due_date`/`domain_status`/`upstream_order_num`（开通成功回填快照）、`settled_at`/`activated_at`、`attempts`、`error`（失败原因，如实记录）。
+
+### 13.5 后台订单管理
+
+- `GET /api/admin/orders?status=&keyword=&page=&page_size=`：keyword 模糊匹配订单号/会员名 → `{"list":[OrderView(含 client_username)],"total",...}`。
+- `GET /api/admin/orders/:id` → OrderAdminDetailView = OrderView + `"transactions":[BalanceTransactionView]`（关联本单的余额流水，14.4）。
+- `POST /api/admin/orders/:id/retry-provision`：仅 ProvisionFailed（否则 `order_state_invalid`）。条目回摆：已有 `upstream_host_id` → `provisioning`（继续轮询）；没有 → `pending`（重新结算）。⚠ 对「settle 网络性失败」的单，重试会**重新结算**——重试前管理员应先到后台「上游对接 · 上游主机」对账，确认上游无本单残留账单/主机（SOP 见 ADR-029）。
+- `POST /api/admin/orders/:id/cancel-refund`，body `{"remark":"可选"}`：仅 ProvisionFailed。`balance_used` 原路退回（refund 流水，同事务）→ 订单 `Refunded` 终态；上游侧残留账单/主机**不动**（remark 自动注明需人工对账）。重复退款被状态机拒绝（防双重退款）。
+
+### 13.6 表结构 `orders` / `order_items`
+
+`orders`：
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | PK, AUTO_INCREMENT | |
+| order_no | varchar(32) | **UNIQUE**, NOT NULL | LIO+YYYYMMDD+4 位日内序号 |
+| client_id | bigint unsigned | INDEX, NOT NULL | 下单会员 |
+| status | varchar(20) | INDEX, NOT NULL, 默认 Pending | 状态机见 13.4 |
+| amount | decimal(12,2) | NOT NULL | 订单总额（成交快照；金额存储取舍见 ADR-027） |
+| balance_used | decimal(12,2) | NOT NULL 默认 0.00 | 余额支付金额（退款不清零，退款事实由流水表达） |
+| pay_method | varchar(20) | NOT NULL 默认 '' | balance（epay 预留批 4） |
+| pay_time / cancel_time | datetime(3) NULL | | |
+| remark | varchar(512) | | 备注；上游错误如实追加（512 字节截断） |
+| created_at / updated_at | datetime(3) | | |
+
+`order_items`：
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | PK, AUTO_INCREMENT | |
+| order_id | bigint unsigned | INDEX, NOT NULL | |
+| product_id | bigint unsigned | NOT NULL | 本地商品 |
+| product_name | varchar(255) | | 商品名快照 |
+| upstream_pid | bigint | NOT NULL | 上游商品 ID |
+| cycle | varchar(32) | NOT NULL | 周期键（monthly 等，与上游一致） |
+| qty | int | NOT NULL 默认 1 | 1-10 |
+| unit_price | decimal(12,2) | NOT NULL | 成交售价快照 |
+| amount | decimal(12,2) | NOT NULL | unit_price × qty（整数分运算） |
+| upstream_order_id | bigint | NOT NULL 默认 0 | 上游账单 ID（settle 的 invoiceid，成功即持久化） |
+| upstream_host_id | bigint | NOT NULL 默认 0 | 上游主机 ID（qty>1 记首台，全量在 provision_info.host_ids） |
+| provision_status | varchar(20) | INDEX, NOT NULL 默认 pending | pending/provisioning/active/failed |
+| provision_info | text | | JSON 快照（字段见 13.4） |
+| created_at / updated_at | datetime(3) | | |
+
+### 13.7 我的主机
+
+- `GET /api/client/hosts?page=&page_size=` → `data: {"list":[ClientHostView],"total":N,...}`；ClientHostView：`{ id, upstream_host_id, product_id, product_name, domain, domain_status, dedicated_ip, assigned_ips, username, next_due_date, synced_at }`。
+  - 数据源 `hosts` 表（开通轮询回填 + host/sync 推送 upsert，client_id 关联当前会员）；
+  - **不输出密码**（会员可在订单详情 provision_info 查看自己机器的密码；后台同上）。
+
+### 13.8 开通转发上游（写端点协议摘要，客户端内部调用）
+
+支付成功后异步执行（每订单一个 goroutine，DB 状态为真源，重启恢复扫描接管；ADR-026/029）：
+
+1. `GET /cart/credit` → `data.currency.id`（结算货币 ID，lyew.com 实测 CNY=1）；
+2. `GET /cart/get_product_config?pid=N` → 可配置项默认值（`DefaultConfigOptions` 镜像上游 auto-fill：数量型取 qty_minimum、选择型取第一个非隐藏子项）+ 主机名/密码输入规则（`products.host/password` 双重编码 JSON：show/prefix/len_num）；据此生成主机名（前缀+大写数字随机段）与密码（12 位，大写+小写+数字，上游 checkHostPassword 对三类字符事实上强制）——**先持久化进 provision_info 再调上游**（崩溃可审计）；
+3. `POST /cart/add_to_shop`（form-urlencoded）：`pid`、`billingcycle`、`qty`、`serverid=0`、`currencyid`、`host`、`password`、`checkout=0`、`configoption[k]=v`（可缺省，上游自动补默认）→ `{status:200,msg:"添加成功"}`（预检：库存/周期/绑定手机）；
+4. `POST /cart/settle`（form）：**内联 `cart_data`** 单商品结算（`cart_data[pid|billingcycle|qty|currencyid|host|password|configoptions[k]]` + `notes`=本地订单号）。上游收到 cart_data 会**清空会话购物车**只结算该件（规避 add_to_shop 残留重复购买）。响应：total>0 → `{status:200,data:{invoiceid:N}}`（账单 Unpaid）；0 元单 → `{status:1001,data:{hostid:[…]}}` 直接开通。
+   ⚠ **settle 不携带 downstream_\* 参数**：上游对 downstream_token 有 whereLike 幂等检查，携带全局共享 token 时第二次购买会命中第一台的 stream_info 而**静默回滚整笔新订单**（源码 CartController::settle；规避方式=开通完成后走 setdownstream 登记，ADR-026）；
+5. `POST /apply_credit`（form）：`invoiceid`、`use_credit=1`、`enough=1`（全额余额支付，拒绝部分支付）→ 成功 **`{status:1001,msg:"支付完成",data:{hostid:[…]}}`**；支付成功即触发上游自动开通（auto_setup=payment）。⚠ settle 本身不扣款——`settle + apply_credit` 两步合起来才是任务口径的「settle（上游余额支付）」（源码 Host.php 互联购买流程原文，实测确证）；
+6. `upstream_order_id`/`upstream_host_id` **成功即持久化**（缩小崩溃窗口）→ 条目转 `provisioning`；
+7. **轮询** `GET /host/header?host_id=N`（10s × 30 次 ≈ 5 分钟）：`data.host_data.{domainstatus,dedicatedip,assignedips[],username,password(明文),nextduedate(unix秒),port,os,ordernum}`；全部主机 `Active` → 回填 provision_info + **upsert hosts 表**（upstream_host_id 关联、product_id/client_id 回填，语义同 host/sync）→ 条目 `active`；`Cancelled/Fraud/Deleted/Terminated` → 条目 `failed`；超时 → 条目 `failed`（可后台重试）；
+8. `POST /host/setdownstream`（form）：`id`=上游主机 ID、`pid`=上游商品 ID（须与主机商品一致，否则 406）、`downstream_url`=本站地址（site_url 设置，空回退监听地址）、`downstream_token`=**派生 32 位**（9.9）、`downstream_id`=本地 hosts.id → `{status:200,msg:"关联成功"}`。**失败只记日志不阻断**（本机部署上游推送不可达属预期）；
+9. 订单终态：全部条目 active → `Active`；存在 failed → `ProvisionFailed`。
+   - 失败补偿分流（ADR-029）：上游**明确业务拒绝**（信封 status 非成功码 → `*upstream.BizError`）→ 本地余额自动原路退回（refund 流水）→ 订单 `Refunded`；**网络性未知错误**（超时/HTTP 5xx/协议异常——上游可能已受理）→ 款不动 → `ProvisionFailed` 转人工。
+   - `GET /cart/summary`：API 密钥身份 403（Machine credentials cannot access member security operations，实测），**不调用**。
+   - TODO（批 4）：开通成功通知会员（notify 场景 provision_success 模板未建，本批占位不发；bill_notify 账单场景本批不发）。
+
+### 13.9 未支付订单超时自动取消
+
+后台定时任务：每 **5 分钟**扫描 `status=Pending AND created_at < NOW()-24h` 的订单批量转 `Cancelled`（remark=「超时未支付自动取消」；未支付无退款）。启动时先扫一次。参数为常量（`pendingSweepInterval`/`pendingOrderTimeout`，见 ADR-026）。
+
+---
+
+## 14. 余额域 `/api/client/balance`、`/api/admin/clients/:id/balance`（批 3-β）
+
+> 余额不落独立账户表：`clients` 表增 `credit` 列（**decimal(12,2) NOT NULL 默认 0.00**，Go 字符串承载；
+> 运算一律整数分，禁止 float64——取舍见 ADR-027）。任何余额变更**必须**与流水同事务（ADR-028）。
+
+### 14.1 clients.credit 列（批 3-β 增量迁移）
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| credit | decimal(12,2) | NOT NULL 默认 0.00 | 会员余额（AutoMigrate 增量加列，不动存量数据；空值由模型 BeforeCreate 钩子归一 "0.00"） |
+
+### 14.2 后台人工充值/扣款
+
+- `POST /api/admin/clients/:id/balance`（管理员 JWT），body `{ "amount": "+50.00", "remark": "银行转账" }`：
+  - `amount`：带符号十进制文本（`^[+-]?\d+(\.\d{1,2})?$`，最多两位小数，超两位拒绝不舍入）；非 0；绝对值 ≤ 1,000,000.00（防误输入）；正数 → `recharge_admin` 流水，负数 → `adjust` 流水；
+  - 扣款后余额为负 → 400 `balance_insufficient`（人工扣款同样不许扣穿）；
+  - 事务：锁会员行（FOR UPDATE）→ 更新 credit → 写流水（admin_id=操作者，审计）；
+  - `remark` ≤255 字符，选填。
+- → `data: { "client_id": 1, "credit": "60.50", "transaction": BalanceTransactionView }`。
+- 错误码：`invalid_param` / `client_not_found`(404) / `balance_insufficient`(400)。
+- 后台会员列表（12.6 ClientView）增补 `credit` 字段（十进制文本）。
+
+### 14.3 会员余额查询
+
+- `GET /api/client/balance?page=&page_size=`（会员 JWT，page_size ≤100）→
+
+```json
+{ "status":200, "msg":"ok", "data": {
+  "credit": "100.00",
+  "list": [ { "id": 2, "type": "consume", "type_text": "消费",
+    "amount": "-20.00", "balance_after": "100.00",
+    "related_type": "order", "related_id": 1,
+    "remark": "订单支付 LIO202610100001", "admin_id": null,
+    "created_at": "2026-10-10 12:00:00" } ],
+  "total": 2, "page": 1, "page_size": 20 } }
+```
+
+  - `type_text` 按 Accept-Language 输出（人工充值/消费/退款/人工调整）。
+
+### 14.4 表结构 `balance_transactions`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | PK, AUTO_INCREMENT | |
+| client_id | bigint unsigned | INDEX, NOT NULL | |
+| type | varchar(32) | INDEX, NOT NULL | `recharge_admin`（人工充值，+）/ `consume`（订单支付，−）/ `refund`（退款，+）/ `adjust`（人工扣款/调整，±） |
+| amount | decimal(12,2) | NOT NULL | **带符号**变动额 |
+| balance_after | decimal(12,2) | NOT NULL | 变动后余额快照（行锁串行化后严格单调可审计） |
+| related_type | varchar(32) | 默认 '' | `order` / 空 |
+| related_id | bigint unsigned | 默认 0 | 关联对象 ID（orders.id） |
+| remark | varchar(255) | | |
+| admin_id | bigint unsigned NULL | | 人工操作者（系统自动流水为 NULL） |
+| created_at | datetime(3) | INDEX | |
+
+### 14.5 并发与一致性（摘要，详见 ADR-028）
+
+- 余额扣减/回充一律：事务 → `SELECT … FOR UPDATE` 锁 clients 行 → 锁内校验（支付：余额 ≥ 订单额；扣款：结果 ≥ 0）→ 更新 credit + 插入流水 → 提交。并发请求在行锁上串行化，**零透支**、流水 `balance_after` 链严格递减/递增（集成测试：10 并发 × 余额只够 5 单 → 恰好 5 成功 5 拒绝；同单 20 并发支付 → 恰好 1 成功）；
+- 余额不足统一 400 `balance_insufficient`（msg 含需/有金额）。
+
+> 新增错误码（已并入 0.4 总表）：`balance_insufficient`(400)、`order_not_found`(404)、`order_state_invalid`(400)、`product_off_sale`(400)、`stock_insufficient`(400)、`cycle_unavailable`(400)、`pay_method_unsupported`(400)。

@@ -41,6 +41,9 @@ const (
 	SettingUpstreamUsername = "upstream_username" // 上游账号（手机号不加区号）
 	SettingUpstreamAPIKey   = "upstream_api_key"  // 上游 API 密钥（登录密码）
 	SettingDownstreamToken  = "downstream_token"  // 下游密钥：上游 host/sync 推送验签用
+
+	// ---- 批 3-β：订单域 ----
+	SettingSiteURL = "site_url" // 本站对外地址（setdownstream 登记的 downstream_url；空则回退 config [server]）
 )
 
 // GetSetting 读取单个设置；键不存在时返回 ("", false, nil)。

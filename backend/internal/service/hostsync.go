@@ -46,8 +46,19 @@ func (s *HostSyncService) HandleSync(ctx context.Context, rawBody []byte) error 
 	if !ok || token == "" {
 		return errcode.New(403, errcode.CodeSignatureInvalid, "下游密钥未配置，拒绝推送（请先在后台·上游对接生成密钥并登记到上游）")
 	}
-	if err := upstream.VerifySignature(rawBody, token); err != nil {
-		slog.Warn("host/sync 验签失败", "err", err, "body_size", len(rawBody))
+	// 批 3-β：上游登记用的是派生 32 位 token（setdownstream 的 strlen==32 硬校验，
+	// 见 upstream.PushToken32），推送签名随之用派生值；完整 token 兜底兼容
+	// 管理员在上游手工登记全文的旧形态——任一变体验签通过即放行。
+	var sigErr error
+	verified := false
+	for _, variant := range upstream.PushTokenVariants(token) {
+		if sigErr = upstream.VerifySignature(rawBody, variant); sigErr == nil {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		slog.Warn("host/sync 验签失败", "err", sigErr, "body_size", len(rawBody))
 		return errcode.New(403, errcode.CodeSignatureInvalid, "签名验证失败")
 	}
 

@@ -1,9 +1,10 @@
 // 会员管理页（批 3-α，替换占位页）：
 // 列表（关键词搜索/状态筛选/分页）+ 启用/禁用/标记上游异常 + 重置密码 + 软删除。
+// 批 3-β 增补：余额列 + 「充值/扣款」Dialog（人工调账写流水，契约 14.2）。
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
-import { KeyRound, Loader2, MoreHorizontal, Search, Trash2, Users } from "lucide-react"
+import { KeyRound, Loader2, MoreHorizontal, Search, Trash2, Users, Wallet } from "lucide-react"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -82,6 +83,12 @@ export default function MembersPage() {
   const [delTarget, setDelTarget] = useState<ClientView | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // 充值/扣款对话框（批 3-β）
+  const [balTarget, setBalTarget] = useState<ClientView | null>(null)
+  const [balAmount, setBalAmount] = useState("")
+  const [balRemark, setBalRemark] = useState("")
+  const [balSaving, setBalSaving] = useState(false)
+
   // 加载列表（setState 全在异步回调，react-hooks/set-state-in-effect）
   useEffect(() => {
     let alive = true
@@ -150,6 +157,37 @@ export default function MembersPage() {
       toast.error(errorMessage(err, t("common.unknownError")))
     } finally {
       setPwdSaving(false)
+    }
+  }
+
+  function openBalance(c: ClientView) {
+    setBalTarget(c)
+    setBalAmount("")
+    setBalRemark("")
+  }
+
+  async function handleAdjustBalance() {
+    if (!balTarget) return
+    const raw = balAmount.trim()
+    // 前端预校验：带符号十进制金额（后端 money 包严格复核）
+    if (!/^[+-]?\d+(\.\d{1,2})?$/.test(raw) || Number(raw) === 0) {
+      toast.error(t("members.balAmountInvalid"))
+      return
+    }
+    setBalSaving(true)
+    try {
+      const res = await api.admin.clients.adjustBalance(
+        balTarget.id,
+        raw.startsWith("+") || raw.startsWith("-") ? raw : `+${raw}`,
+        balRemark.trim(),
+      )
+      toast.success(t("members.balDone", { credit: res.credit }))
+      setBalTarget(null)
+      reload()
+    } catch (err) {
+      toast.error(errorMessage(err, t("common.unknownError")))
+    } finally {
+      setBalSaving(false)
     }
   }
 
@@ -240,6 +278,7 @@ export default function MembersPage() {
                   <TableHead>{t("members.colUsername")}</TableHead>
                   <TableHead>{t("members.colContact")}</TableHead>
                   <TableHead>{t("members.colRealName")}</TableHead>
+                  <TableHead className="text-right">{t("members.colCredit")}</TableHead>
                   <TableHead>{t("members.colStatus")}</TableHead>
                   <TableHead>{t("members.colLastLogin")}</TableHead>
                   <TableHead>{t("members.colCreated")}</TableHead>
@@ -249,7 +288,7 @@ export default function MembersPage() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={8}>
                       <div className="flex items-center justify-center gap-2 py-10 text-muted-foreground">
                         <Loader2 className="size-4 animate-spin" />
                         <span className="text-sm">{t("common.loading")}</span>
@@ -258,7 +297,7 @@ export default function MembersPage() {
                   </TableRow>
                 ) : list.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
                       {t("members.empty")}
                     </TableCell>
                   </TableRow>
@@ -281,6 +320,9 @@ export default function MembersPage() {
                         {c.company && (
                           <div className="text-xs text-muted-foreground">{c.company}</div>
                         )}
+                      </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        ¥{c.credit || "0.00"}
                       </TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(c.status)}>
@@ -313,6 +355,10 @@ export default function MembersPage() {
                                 {t("members.markUpstreamIssue")}
                               </DropdownMenuItem>
                             )}
+                            <DropdownMenuItem onClick={() => openBalance(c)}>
+                              <Wallet />
+                              {t("members.adjustBalance")}
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => openResetPwd(c)}>
                               <KeyRound />
                               {t("members.resetPwd")}
@@ -401,6 +447,55 @@ export default function MembersPage() {
             <Button onClick={handleResetPwd} disabled={pwdSaving || !pwd1}>
               {pwdSaving && <Loader2 className="animate-spin" />}
               {t("members.resetPwd")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 充值/扣款对话框（批 3-β，契约 14.2：写流水，余额变更与流水同事务） */}
+      <Dialog open={balTarget !== null} onOpenChange={(open) => !open && setBalTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("members.balTitle")}</DialogTitle>
+            <DialogDescription>
+              {balTarget &&
+                t("members.balDesc", {
+                  name: balTarget.username,
+                  credit: balTarget.credit || "0.00",
+                })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="bal-amount">{t("members.balAmount")}</Label>
+              <Input
+                id="bal-amount"
+                value={balAmount}
+                onChange={(e) => setBalAmount(e.target.value)}
+                placeholder="+50.00 / -20.00"
+                disabled={balSaving}
+                inputMode="decimal"
+              />
+              <p className="text-xs text-muted-foreground">{t("members.balAmountHelp")}</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="bal-remark">{t("members.balRemark")}</Label>
+              <Input
+                id="bal-remark"
+                value={balRemark}
+                onChange={(e) => setBalRemark(e.target.value)}
+                disabled={balSaving}
+                maxLength={255}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBalTarget(null)} disabled={balSaving}>
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={handleAdjustBalance} disabled={balSaving || !balAmount.trim()}>
+              {balSaving && <Loader2 className="animate-spin" />}
+              {t("members.balSubmit")}
             </Button>
           </DialogFooter>
         </DialogContent>

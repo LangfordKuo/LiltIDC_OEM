@@ -201,3 +201,39 @@ backend/
 - **注册流程次序**：验证码校验（不消耗）→ 唯一性预检 → 落库（唯一索引兜底并发，冲突翻译为 `*_exists`）→ Consume 验证码——无显式事务，靠「索引兜底 + 消耗在最后」保证一致性；
 - sms 通道 send-code 前置**用户名预占查重**（短信场景无法回显表单错误，发送前拦截 `username_exists`）。
 - 端到端验证（mock SMTP 收信提取真实验证码走完全流程）：发送/注册/重放拒绝/频控 429/爆破作废/图形码生成，全部通过，见批 3-α 交付报告。
+
+## ADR-026 订单状态机与开通转发设计（批 3-β）
+
+**决策**：
+
+- **状态机白名单制**（`model.CanTransition`）：`Pending → Paid → Active / ProvisionFailed / Refunded`；`Pending → Cancelled`；`ProvisionFailed → Paid（后台重试）/ Active / Refunded（后台取消并退款）`；`Active/Cancelled/Refunded` 为终态。白名单外的迁移在服务层（会员/后台接口）与 worker（transitOrder）双侧强制拒绝并记日志——「Paid 后会员不可取消」等约束不依赖前端。单测覆盖全部合法/非法边。
+- **开通转发链路**（对齐 ZJMF-CBAP 源码 `app/common/logic/Host.php` 互联购买流程原文 + lyew.com 实测）：`add_to_shop`（预检）→ `settle`（内联 cart_data 结算，返回 invoiceid）→ `apply_credit`（use_credit=1&enough=1 余额支付，成功码 **1001**，返回 hostid[]，触发上游 auto_setup 开通）→ 轮询 `host/header` 至 Active → hosts 回填 → `setdownstream` 登记下游。POST 一律 **form-urlencoded**（上游 zjmfCurl/commonCurl 用 http_build_query，同形发送）。
+- **⚠ settle 不携带 downstream_\* 参数（实测源码级陷阱）**：settle 对 downstream_token 做 `whereLike(stream_info, %token%)` 幂等检查——命中已登记同 token 的主机时**提前 return 1001 且不 commit，整笔新订单被静默回滚**（只返回旧 hostid）。全局共享一个 downstream_token 时，第二笔购买必然触发。因此购买链路不带 downstream 参数，下游登记移到开通完成后的 `setdownstream`（该端点无此检查）；代价是上游开通过程的首次推送不会到达（stream_info 尚空），由轮询兜底——与「轮询为主」的决策自洽。
+- **推送密钥 32 位派生**：上游 setdownstream 对 token 有 `strlen==32` 硬校验，本系统 downstream_token 为 64 hex——两侧统一派生规则「>32 位取前 32」，host/sync 验签按 `[派生32, 完整]` 变体依次尝试（兼容手工登记全文的旧形态）。
+- **worker 形态：每订单 goroutine + 信号量限流(4) + 内存 inflight 去重 + 启动恢复扫描**，不引入持久化任务队列。理由：DB 状态（orders.status/order_items.provision_status）就是队列真源，goroutine 只是驱动器；单机部署下最简且崩溃可恢复（重启后 Start() 扫描 Paid 订单重新驱动：有 host_id 的继续轮询、没有的重新结算）。多实例部署需分布式锁，留待真实需要时引入。
+- **轮询为主、推送为辅**：开通结果以 `host/header` 轮询为准（10s × 30 次 ≈ 5 分钟，常量）——本机/内网部署上游推送不可达（localhost 收不到），轮询保证任何网络形态下闭环；host/sync 推送仅作为生产环境的加速补充与后续生命周期事件（暂停/取消/续费）通道。
+- **未支付超时取消**：每 5 分钟批量扫 `Pending ∧ created_at < now-24h` → Cancelled（未支付无退款）。用定时器而非延迟队列：订单量级下全表条件 UPDATE 足够便宜，无新增基础设施。
+- **购物车简化**：本批只做「立即购买」（每单 1 条目，qty 1-10）；order_items 表结构天然支持多条目，购物车（会话车/多商品结算/优惠码）留批 4。理由：单商品闭环最短路径打通「下单→余额支付→上游开通→回填」主链路，购物车是纯本地增量不动核心状态机。
+
+## ADR-027 金额存储形式：DECIMAL(12,2) 列 + 十进制字符串传输 + 整数分运算（批 3-β）
+
+**决策**：所有金额列（clients.credit、orders.amount/balance_used、order_items.unit_price/amount、balance_transactions.amount/balance_after）用 **MySQL DECIMAL(12,2)**；Go 模型字段为 string（driver 对 DECIMAL 返回 []byte，GORM 直扫 string 无损）；API/前端传输一律十进制文本（与批 2 PriceMap 字符串金额同风格）；**一切加减比较运算经 `pkg/money` 转 int64 整数分完成，全链路禁止 float64 参与金额运算**。解析严格：`^[+-]?\d+(\.\d{1,2})?$`，超过两位小数直接拒绝（不做静默舍入——金额歧义必须暴露为错误）。
+
+**理由**：float64 二进制无法精确表示 0.1（`0.1+0.2≠0.3`，累加分位漂移是财务系统经典事故）；DECIMAL 在库内精确且人类可读（DBA 直接 SELECT 审计）；字符串传输避免 JSON 数字的 JS 端浮点二次污染。放弃「整数分存库」的原因：库内可读性差（对账/人工修数需要心算 ÷100），且批 2 价格体系已是字符串金额，风格统一。前端同款纪律：`lib/prices.ts` 的 `priceToCents/multiplyPrice` 用 BigInt 整数分运算（19.99×2=39.98 精确）。空串写 DECIMAL 会触发 MySQL 严格模式 1366 → 模型 BeforeCreate 钩子归一 "0.00"。
+
+## ADR-028 余额事务一致性：行级锁 + 变更与流水同事务（批 3-β）
+
+**决策**：余额的每一笔变动（支付扣减/退款回充/人工调账）都走同一模板：**事务 → `SELECT … FOR UPDATE` 锁 clients 行 → 锁内读余额并校验（支付：余额 ≥ 订单额；扣款：结果 ≥ 0）→ UPDATE credit → INSERT balance_transactions（带符号 amount + balance_after 快照 + related 关联 + admin_id）→ 提交**。校验与更新都在行锁临界区内，并发请求在锁上串行化，结构上不可能透支；订单支付额外先锁 orders 行（固定「先订单后会员」加锁顺序，杜绝交叉死锁），Pending 态复核在锁内完成（同单并发支付恰好一次成功）。
+
+**验证**（MySQL 集成测试，LILTIDC_TEST_DSN 门控）：余额 ¥100 + 10 张 ¥20 订单并发支付 → 恰好 5 成功 5 拒绝、终态 ¥0.00、consume 流水恰 5 条且 balance_after 链严格 80→60→40→20→0；同单 20 并发支付 → 恰好 1 成功；人工扣穿 → balance_insufficient。默认 `go test ./...`（无 DSN）整组 Skip 保持纯单测可移植性。
+
+**放弃的替代方案**：乐观锁（`UPDATE … SET credit=credit-? WHERE credit>=?` 判 RowsAffected）也能防透支，但拿不到锁内余额快照写 balance_after（需二次查询，产生竞态窗口下的快照漂移）；余额表独立 accounts + 外键对 MySQL 5.7 无增益，clients 加列最简。
+
+## ADR-029 上游写失败的补偿路径（批 3-β）
+
+**决策**：按「上游是否可能已受理」二分补偿——
+
+1. **明确业务拒绝**（上游信封返回业务错误码：add_to_shop/settle/apply_credit 的 400/406/410/415 等，客户端转 `*upstream.BizError`，携带上游 msg 原文）：上游**确定没有**产生账单/主机 → **本地余额自动原路退回**（refund 流水，同事务）→ 订单 `Refunded` 终态；拒绝原因如实写入 orders.remark 与条目 provision_info.error（不许吞）。
+2. **网络性未知错误**（连接失败/超时/HTTP 5xx/非 JSON 响应）：上游**可能已受理**（settle 提交后响应丢失等）→ **款不动**，订单 `ProvisionFailed` 转人工；后台提供「重试开通」（继续轮询或重新结算）与「取消并退款」（refund 流水 + Refunded，remark 注明上游残留需人工对账）。自动退款在此分支是**双向资损源**（钱退了、机器可能还在开），必须人工裁决。
+
+**配套细节**：settle 成功后**立即持久化 invoiceid** 再调 apply_credit（缩小「上游已受理但本地无记录」的崩溃窗口至毫秒级）；残余窗口（settle 响应前进程崩溃）由重试 SOP 兜底——重试会重新结算，重试前管理员须到「上游对接·上游主机」页对账确认无残留（已写入契约 13.5 与后台按钮提示）；Refunded/Active/Cancelled 终态无出边，状态机层面杜绝双重退款。0 元单（settle 直接 1001）不走 apply_credit。**已知限制**：qty>1 时 apply_credit 返回多台主机，全部 upsert 进 hosts 并逐台轮询/登记，但 order_items.upstream_host_id 只记首台（全量在 provision_info.host_ids）。

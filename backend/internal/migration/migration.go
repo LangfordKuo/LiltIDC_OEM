@@ -60,7 +60,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Product{},
 		&model.Host{},
 		// ---- 批 3-α：会员域 ----
-		&model.Client{},
+		&model.Client{}, // 批 3-β 增量加 credit 列（AutoMigrate 只增不删）
+		// ---- 批 3-β：订单域与余额域 ----
+		&model.Order{},
+		&model.OrderItem{},
+		&model.BalanceTransaction{},
 	); err != nil {
 		return fmt.Errorf("AutoMigrate 失败: %w", err)
 	}

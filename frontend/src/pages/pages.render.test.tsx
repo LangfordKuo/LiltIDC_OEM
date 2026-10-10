@@ -10,6 +10,7 @@ import i18n, { i18nReady } from "@/i18n"
 import zhCN from "@/i18n/locales/zh-CN.json"
 import AdminLayout from "@/pages/admin/layout"
 import MembersPage from "@/pages/admin/members"
+import AdminOrdersPage from "@/pages/admin/orders"
 import ProductsPage from "@/pages/admin/products"
 import SettingsPage from "@/pages/admin/settings"
 import UpstreamPage from "@/pages/admin/upstream"
@@ -101,6 +102,7 @@ beforeEach(() => {
               phone: "13800138000",
               real_name: "测试会员",
               company: "",
+              credit: "88.80",
               status: 3,
               status_text: "上游关联异常",
               upstream_uid: null,
@@ -112,17 +114,61 @@ beforeEach(() => {
           total: 1,
         })
       }
+      if (url.includes("/api/admin/orders")) {
+        return jsonResponse({
+          list: [
+            {
+              id: 1,
+              order_no: "LIO202610100001",
+              client_id: 1,
+              client_username: "member01",
+              status: "ProvisionFailed",
+              status_text: "开通失败",
+              amount: "20.00",
+              balance_used: "20.00",
+              pay_method: "balance",
+              pay_time: "2026-10-10 12:00:00",
+              cancel_time: "",
+              remark: "上游结算失败",
+              created_at: "2026-10-10 11:59:00",
+              items: [
+                {
+                  id: 1,
+                  product_id: 1,
+                  product_name: "香港二区 CN2 A型",
+                  upstream_pid: 1,
+                  cycle: "monthly",
+                  cycle_text: "月付",
+                  qty: 1,
+                  unit_price: "20.00",
+                  amount: "20.00",
+                  upstream_order_id: 0,
+                  upstream_host_id: 0,
+                  provision_status: "failed",
+                  provision_status_text: "失败",
+                  provision_info: null,
+                },
+              ],
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        })
+      }
       return jsonResponse(null, 404)
     }),
   )
 })
 
 describe("首页 /", () => {
-  it("渲染关键译文且无未翻译 key", () => {
+  it("渲染关键译文且无未翻译 key（批 3-β：商城已上线形态）", () => {
     const { container } = renderWithProviders(<Home />)
-    expect(screen.getByText(zhCN.home.comingSoon)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.home.nowOpen)).toBeInTheDocument()
     expect(container.textContent).toContain(zhCN.home.tagline)
     expect(container.textContent).toContain(zhCN.home.adminLogin)
+    expect(container.textContent).toContain(zhCN.home.clientLogin)
+    expect(container.textContent).toContain(zhCN.home.enterStore)
     expect(container.textContent).toContain("由 LiltIDC_OEM 驱动")
     expectNoRawKeys(container)
   })
@@ -216,6 +262,30 @@ describe("会员管理页 /admin/members", () => {
     expect(await screen.findByText("member01")).toBeInTheDocument()
     expect(screen.getByText("上游关联异常")).toBeInTheDocument()
     expect(screen.getByText(zhCN.members.neverLogin)).toBeInTheDocument()
+    expectNoRawKeys(container)
+  })
+
+  it("批 3-β：余额列展示且充值/扣款入口存在", async () => {
+    const { container } = renderWithProviders(<MembersPage />, "/admin/members")
+    expect(await screen.findByText("member01")).toBeInTheDocument()
+    // 余额列（stub credit=88.80）
+    expect(screen.getByText("¥88.80")).toBeInTheDocument()
+    expect(screen.getByText(zhCN.members.colCredit)).toBeInTheDocument()
+    expectNoRawKeys(container)
+  })
+})
+
+describe("后台订单管理页 /admin/orders（批 3-β）", () => {
+  it("渲染列表与失败订单（重试/取消退款入口），且无未翻译 key", async () => {
+    const { container } = renderWithProviders(<AdminOrdersPage />, "/admin/orders")
+    expect(screen.getByText(zhCN.adminOrders.title)).toBeInTheDocument()
+    expect(screen.getByText(zhCN.adminOrders.search)).toBeInTheDocument()
+    // 等待异步列表落地（stub 返回 1 笔 ProvisionFailed 订单）
+    expect(await screen.findByText("LIO202610100001")).toBeInTheDocument()
+    expect(screen.getByText("开通失败")).toBeInTheDocument()
+    expect(screen.getByText("member01")).toBeInTheDocument()
+    // 详情按钮在行内（重试/取消退款在 DropdownMenu 内，点击展开后才入 DOM）
+    expect(screen.getByText(zhCN.clientOrders.detail)).toBeInTheDocument()
     expectNoRawKeys(container)
   })
 })

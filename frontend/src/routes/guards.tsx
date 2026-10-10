@@ -6,7 +6,7 @@
 import type { ReactNode } from "react"
 import { Navigate, Outlet, useLocation } from "react-router-dom"
 
-import { getToken } from "@/lib/api"
+import { getClientToken, getToken } from "@/lib/api"
 import { useInstallState } from "@/lib/install-state"
 
 /**
@@ -32,4 +32,20 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location }} />
   }
   return <>{children}</>
+}
+
+/**
+ * 需**会员**登录才可访问（批 3-β）；无会员 token 跳 /client-login 并记录来源路径。
+ *
+ * 与管理员守卫完全隔离：token 键 liltidc_client_token、登录页 /client-login、
+ * 后端 JWT issuer liltidc-oem-client（ADR-024）。token 过期场景由 api 层
+ * 401 → clearClientToken + redirectTo("/client-login") 兜底。
+ * 两种使用形态与 RequireInstalled 相同（包裹子元素 / 布局路由 Outlet）。
+ */
+export function RequireClientAuth({ children }: { children?: ReactNode }) {
+  const location = useLocation()
+  if (!getClientToken()) {
+    return <Navigate to="/client-login" replace state={{ from: location }} />
+  }
+  return <>{children ?? <Outlet />}</>
 }

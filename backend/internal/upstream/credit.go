@@ -4,9 +4,10 @@ import "context"
 
 // CurrencyInfo 是上游货币信息。
 type CurrencyInfo struct {
-	Code   string `json:"code"`   // 如 CNY
-	Prefix string `json:"prefix"` // 如 ¥
-	Suffix string `json:"suffix"` // 如 元
+	ID     FlexInt `json:"id"`     // 货币 ID（批 3-β 下单链路 currencyid 参数用；lyew.com 实测 CNY=1）
+	Code   string  `json:"code"`   // 如 CNY
+	Prefix string  `json:"prefix"` // 如 ¥
+	Suffix string  `json:"suffix"` // 如 元
 }
 
 // Credit 是上游账户余额（GET /cart/credit）。

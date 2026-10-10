@@ -59,3 +59,29 @@ export function isValidPrice(price: string): boolean {
   const n = Number(trimmed)
   return Number.isFinite(n) && n > 0
 }
+
+/**
+ * 十进制金额文本 → 整数分（BigInt）。纯字符串解析，不经 float——
+ * 金额运算禁止浮点（与后端 money 包同一纪律，ADR-027）。非法输入返回 null。
+ */
+export function priceToCents(price: string): bigint | null {
+  const m = /^\+?(\d+)(?:\.(\d{1,2}))?$/.exec(price.trim())
+  if (!m) return null
+  const frac = (m[2] ?? "").padEnd(2, "0")
+  return BigInt(m[1]) * 100n + BigInt(frac)
+}
+
+/** 整数分 → 两位小数金额文本。 */
+export function centsToPrice(cents: bigint): string {
+  const neg = cents < 0n
+  const abs = neg ? -cents : cents
+  const s = `${abs / 100n}.${String(abs % 100n).padStart(2, "0")}`
+  return neg ? `-${s}` : s
+}
+
+/** 单价 × 数量（字符串金额乘法，整数分域运算，杜绝浮点漂移）；非法单价返回 null。 */
+export function multiplyPrice(price: string, qty: number): string | null {
+  const cents = priceToCents(price)
+  if (cents === null || !Number.isInteger(qty) || qty < 0) return null
+  return centsToPrice(cents * BigInt(qty))
+}

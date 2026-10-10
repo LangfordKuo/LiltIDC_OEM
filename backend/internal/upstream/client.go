@@ -134,9 +134,20 @@ func (c *Client) loginLocked(ctx context.Context) error {
 // userAgent 是上游请求的 UA 标识（部分上游 WAF 会拦空 UA）。
 const userAgent = "LiltIDC-OEM/0.2 (+upstream-client)"
 
-// do 执行上游 API 请求：自动登录、jwt 失效（status=405）时重登重试一次。
-// out 为 nil 时忽略响应体。
+// do 执行上游 API 请求（GET 无请求体；成功状态码 0/200）：
+// 自动登录、jwt 失效（status=405）时重登重试一次。out 为 nil 时忽略响应体。
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, out any) error {
+	return c.doBody(ctx, method, path, query, "", "", []int{0, 200}, out)
+}
+
+// doBody 执行上游 API 请求的完整形态（批 3-β 写端点扩展）：
+//   - body 非空时作为请求体发送（contentType 如 application/x-www-form-urlencoded，
+//     魔方互联调用 zjmfCurl/commonCurl 的 POST 一律 form 编码，本系统同形发送）；
+//   - success 是允许的成功状态码集合（读端点 {0,200}；写端点含 1001——魔方
+//     "购买成功/支付完成" 语义，见 cart.go）；status 缺失容忍为 0（ADR-020）；
+//   - 业务拒绝返回 *BizError（携带上游 status/msg 原文，service 层区分补偿路径）；
+//   - jwt 失效（status=405）重登重试一次（防死循环，语义与批 2 完全一致）。
+func (c *Client) doBody(ctx context.Context, method, path string, query url.Values, body, contentType string, success []int, out any) error {
 	// 无缓存 jwt 时先登录（失败直接报错，省一次必 405 的请求）
 	c.mu.Lock()
 	hasJWT := c.jwt != ""
@@ -146,7 +157,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			return err
 		}
 	}
-	err := c.doOnce(ctx, method, path, query, out)
+	err := c.doOnce(ctx, method, path, query, body, contentType, success, out)
 	if errors.Is(err, ErrReauth) {
 		// jwt 失效：重登一次再重试（仅一次，防死循环）
 		c.mu.Lock()
@@ -156,13 +167,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		if loginErr != nil {
 			return loginErr
 		}
-		err = c.doOnce(ctx, method, path, query, out)
+		err = c.doOnce(ctx, method, path, query, body, contentType, success, out)
 	}
 	return err
 }
 
 // doOnce 执行单次请求（不带重登逻辑）。
-func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, out any) error {
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values, body, contentType string, success []int, out any) error {
 	c.mu.Lock()
 	jwt := c.jwt
 	c.mu.Unlock()
@@ -171,12 +182,19 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
 	if err != nil {
 		return fmt.Errorf("构造上游请求失败: %w", err)
 	}
 	if jwt != "" {
 		req.Header.Set("Authorization", "Bearer "+jwt)
+	}
+	if body != "" && contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
@@ -192,7 +210,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	}
 
 	// envelope 解析（一次 Unmarshal 同时取 status/msg 与 data 载荷）：
-	//   - {"status":405} = jwt 失效 → ErrReauth；其它非 0/200 status = 业务错误；
+	//   - {"status":405} = jwt 失效 → ErrReauth；其它非成功码 status = 业务拒绝（*BizError）；
 	//   - 魔方真实形状：业务端点 payload 嵌在 "data" 键下（仅登录 jwt 在顶层，
 	//     登录走 loginLocked 独立路径）——有 data（非 null）则解包 data，
 	//     否则解整个响应体（兼容顶层 payload 形状与缺省 status 的端点）。
@@ -207,7 +225,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	if status == 405 {
 		return ErrReauth
 	}
-	if status != 0 && status != 200 {
+	if !isSuccessStatus(status, success) {
 		msg := ""
 		if m, ok := raw["msg"]; ok {
 			_ = json.Unmarshal(m, &msg)
@@ -215,7 +233,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		if msg == "" {
 			msg = "无错误描述"
 		}
-		return fmt.Errorf("上游业务错误（status=%d）: %s", status, msg)
+		return &BizError{Path: path, Status: status, Msg: msg}
 	}
 	if out != nil {
 		payload := data
@@ -227,4 +245,18 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		}
 	}
 	return nil
+}
+
+// isSuccessStatus 判断信封 status 是否属于成功集合（0 恒视为成功——
+// 部分端点成功响应不含 status 字段，ADR-020 宽松判定保持不变）。
+func isSuccessStatus(status int, success []int) bool {
+	if status == 0 {
+		return true
+	}
+	for _, s := range success {
+		if status == s {
+			return true
+		}
+	}
+	return false
 }

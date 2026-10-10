@@ -78,6 +78,11 @@ func run() error {
 
 	// ---- 3. 启动 HTTP 服务 ----
 	engine := router.New(a)
+	// 批 3-β：后台任务（开通转发 worker + 未支付超时清扫）在路由组装（注册启动器）
+	// 之后启动；已安装态才启动，未安装态由安装热切换路径触发（app.StartBackground 幂等）
+	if cfg.Install.Installed {
+		a.StartBackground()
+	}
 	srv := &http.Server{
 		Addr:              cfg.Server.ListenAddr(),
 		Handler:           engine,

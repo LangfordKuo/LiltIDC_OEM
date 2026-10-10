@@ -494,6 +494,7 @@ type ClientView struct {
 	Phone            string `json:"phone"`
 	RealName         string `json:"real_name"`
 	Company          string `json:"company"`
+	Credit           string `json:"credit"` // 余额（批 3-β；DECIMAL 字符串文本）
 	Status           int8   `json:"status"`
 	StatusText       string `json:"status_text"`
 	UpstreamUID      *int64 `json:"upstream_uid"`
@@ -670,10 +671,15 @@ func toClientProfile(c *model.Client) *ClientProfile {
 }
 
 func toClientView(c *model.Client, lang string) ClientView {
+	credit := c.Credit
+	if credit == "" {
+		credit = "0.00"
+	}
 	v := ClientView{
 		ID: c.ID, Username: c.Username,
 		Email: strVal(c.Email), Phone: strVal(c.Phone),
 		RealName: c.RealName, Company: c.Company,
+		Credit: credit,
 		Status: c.Status, StatusText: clientStatusText(c.Status, lang),
 		UpstreamUID: c.UpstreamUID,
 		CreatedAt:   c.CreatedAt.Format("2006-01-02 15:04:05"),

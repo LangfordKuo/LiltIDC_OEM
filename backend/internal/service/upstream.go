@@ -39,6 +39,7 @@ type UpstreamConfigView struct {
 	APIKeySet       bool   `json:"api_key_set"`
 	DownstreamToken string `json:"downstream_token"`
 	SyncPath        string `json:"sync_path"` // 回调路径；前端拼 window.location.origin 展示完整地址
+	SiteURL         string `json:"site_url"`  // 本站对外地址（批 3-β：setdownstream 登记的 downstream_url）
 }
 
 // GetConfig 读取上游配置。downstream_token 为空时自动生成并落库
@@ -47,7 +48,7 @@ func (s *UpstreamService) GetConfig(ctx context.Context) (*UpstreamConfigView, e
 	db := s.requireDB()
 	m, err := model.GetSettingsMap(db.WithContext(ctx),
 		model.SettingUpstreamHostname, model.SettingUpstreamUsername,
-		model.SettingUpstreamAPIKey, model.SettingDownstreamToken)
+		model.SettingUpstreamAPIKey, model.SettingDownstreamToken, model.SettingSiteURL)
 	if err != nil {
 		return nil, errcode.Internal("读取上游配置失败").WithErr(err)
 	}
@@ -64,6 +65,7 @@ func (s *UpstreamService) GetConfig(ctx context.Context) (*UpstreamConfigView, e
 		APIKeySet:       m[model.SettingUpstreamAPIKey] != "",
 		DownstreamToken: token,
 		SyncPath:        HostSyncPath,
+		SiteURL:         m[model.SettingSiteURL],
 	}, nil
 }
 
@@ -72,6 +74,9 @@ type SaveUpstreamConfigRequest struct {
 	Hostname string `json:"hostname"`
 	Username string `json:"username"`
 	APIKey   string `json:"api_key"`
+	// SiteURL 是本站对外地址（批 3-β；下游登记用。留空 = 不修改；
+	// 显式提交空串无法区分「不修改」，如需清空改回退默认请直接改 settings）。
+	SiteURL *string `json:"site_url"`
 }
 
 // SaveConfig 保存上游配置并使缓存的上游会话失效（新凭据下次请求即生效）。
@@ -94,6 +99,17 @@ func (s *UpstreamService) SaveConfig(ctx context.Context, req *SaveUpstreamConfi
 	}
 	if key := strings.TrimSpace(req.APIKey); key != "" {
 		kvs[model.SettingUpstreamAPIKey] = key
+	}
+	if req.SiteURL != nil {
+		// 本站地址（下游登记的 downstream_url）：须为完整 http/https URL，存储去尾斜杠
+		siteURL := strings.TrimRight(strings.TrimSpace(*req.SiteURL), "/")
+		if siteURL != "" {
+			su, err := url.Parse(siteURL)
+			if err != nil || (su.Scheme != "http" && su.Scheme != "https") || su.Host == "" {
+				return errcode.InvalidParam("本站地址必须是完整 URL（http:// 或 https:// 开头），如 https://idc.example.com")
+			}
+		}
+		kvs[model.SettingSiteURL] = siteURL
 	}
 	if err := model.SetSettingsMap(db.WithContext(ctx), kvs); err != nil {
 		return errcode.Internal("保存上游配置失败").WithErr(err)

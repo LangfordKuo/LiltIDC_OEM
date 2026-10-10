@@ -42,6 +42,15 @@ const (
 	CodeCaptchaRequired   = "captcha_required"    // 需要图形验证码
 	CodeCaptchaInvalid    = "captcha_invalid"     // 图形验证码错误/过期（校验即焚）
 	CodeClientNotFound    = "client_not_found"    // 会员不存在
+
+	// ---- 批 3-β：订单域与余额域 ----
+	CodeBalanceInsufficient  = "balance_insufficient"   // 余额不足（支付/扣款拒绝，防透支）
+	CodeOrderNotFound        = "order_not_found"        // 订单不存在（或不属于当前会员，防枚举）
+	CodeOrderStateInvalid    = "order_state_invalid"    // 订单状态机非法迁移（支付非待支付单/取消已支付单等）
+	CodeProductOffSale       = "product_off_sale"       // 商品已下架（下单拒绝）
+	CodeStockInsufficient    = "stock_insufficient"     // 库存不足（stock_control 商品实时查上游）
+	CodeCycleUnavailable     = "cycle_unavailable"      // 所选计费周期未配置售价/停售
+	CodePayMethodUnsupported = "pay_method_unsupported" // 支付方式不支持（本批仅 balance；epay 批 4）
 )
 
 // BizError 是携带 HTTP 状态码与字符串错误码的业务错误。

@@ -1,4 +1,4 @@
-// 上游配置页签：地址/账号/API 密钥 + 保存 + 测试连接（真实调上游登录+余额，结果如实显示）。
+// 上游配置页签：地址/账号/API 密钥/本站地址 + 保存 + 测试连接（真实调上游登录+余额，结果如实显示）。
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -29,6 +29,8 @@ export function ConfigTab() {
   const [username, setUsername] = useState("")
   const [apiKey, setApiKey] = useState("")
   const [apiKeySet, setApiKeySet] = useState(false)
+  // 本站对外地址（批 3-β：开通后 setdownstream 登记的 downstream_url；空=回退后端监听地址）
+  const [siteUrl, setSiteUrl] = useState("")
   const [saving, setSaving] = useState(false)
 
   const [testing, setTesting] = useState(false)
@@ -44,6 +46,7 @@ export function ConfigTab() {
         setHostname(cfg.hostname)
         setUsername(cfg.username)
         setApiKeySet(cfg.api_key_set)
+        setSiteUrl(cfg.site_url || "")
         setLoadError(null)
       })
       .catch((err: unknown) => {
@@ -65,7 +68,12 @@ export function ConfigTab() {
   async function handleSave() {
     setSaving(true)
     try {
-      await api.admin.upstream.saveConfig({ hostname, username, api_key: apiKey })
+      await api.admin.upstream.saveConfig({
+        hostname,
+        username,
+        api_key: apiKey,
+        site_url: siteUrl.trim(),
+      })
       setApiKey("")
       if (apiKey) setApiKeySet(true)
       toast.success(t("upstream.config.saved"))
@@ -168,6 +176,18 @@ export function ConfigTab() {
                   disabled={saving}
                   autoComplete="new-password"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="up-siteurl">{t("upstream.config.siteUrl")}</Label>
+                <Input
+                  id="up-siteurl"
+                  value={siteUrl}
+                  onChange={(e) => setSiteUrl(e.target.value)}
+                  placeholder="https://idc.example.com"
+                  disabled={saving}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">{t("upstream.config.siteUrlHelp")}</p>
               </div>
             </div>
 

@@ -123,8 +123,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     redirectTo("/install")
   } else if (code === "unauthorized") {
     if (options.scope === "client") {
-      // 会员域：清会员 token；会员端页面批 3-β 引入，暂不跳转（避免误跳管理员登录页）
+      // 会员域：清会员 token 并跳会员登录页（与管理员登录页隔离，ADR-024）
       clearClientToken()
+      redirectTo("/client-login")
     } else {
       clearToken()
       redirectTo("/login")
@@ -226,6 +227,8 @@ export interface UpstreamConfigData {
   api_key_set: boolean
   downstream_token: string
   sync_path: string
+  /** 本站对外地址（批 3-β：开通后 setdownstream 登记的 downstream_url；空=回退后端监听地址） */
+  site_url: string
 }
 
 export interface UpstreamCurrency {
@@ -351,6 +354,8 @@ export interface ClientView {
   phone: string
   real_name: string
   company: string
+  /** 余额（十进制字符串文本，批 3-β） */
+  credit: string
   status: number
   /** 后端按 Accept-Language 输出的状态文案，前端直接展示 */
   status_text: string
@@ -360,7 +365,136 @@ export interface ClientView {
   created_at: string
 }
 
+// ---- 批 3-β：商城 / 订单 / 余额（契约文档第 13/14 章） ----
+
+/** 商城商品卡片（公开接口，免鉴权） */
+export interface StoreProduct {
+  id: number
+  name: string
+  /** 上游 HTML 描述原文（列表页提取纯文本摘要；详情页 sanitize 后渲染） */
+  description: string
+  type: string
+  group_id: number
+  group_name: string
+  sale_prices: PriceMap
+  /** 起价（各周期最低售价文本） */
+  price_from: string
+  stock_qty: number
+  stock_control: boolean
+  in_stock: boolean
+}
+
+export interface StoreGroup {
+  id: number
+  name: string
+  products: StoreProduct[]
+}
+
+/** 商城商品详情（description 为上游 HTML 原文，渲染前必须 sanitize） */
+export interface StoreProductDetail extends StoreProduct {
+  /** 有售价的周期键（后端按规范序排好） */
+  cycles: string[]
+}
+
+/** 订单条目开通信息快照（provision_info JSON，字段全部可选） */
+export interface ProvisionInfo {
+  hostname?: string
+  password?: string
+  currency_id?: number
+  host_ids?: number[]
+  ip?: string
+  assigned_ips?: string
+  username?: string
+  host_password?: string
+  next_due_date?: string
+  domain_status?: string
+  upstream_order_num?: string
+  settled_at?: string
+  activated_at?: string
+  attempts?: number
+  error?: string
+}
+
+export interface OrderItemView {
+  id: number
+  product_id: number
+  product_name: string
+  upstream_pid: number
+  cycle: string
+  cycle_text: string
+  qty: number
+  unit_price: string
+  amount: string
+  upstream_order_id: number
+  upstream_host_id: number
+  provision_status: "pending" | "provisioning" | "active" | "failed"
+  provision_status_text: string
+  provision_info: ProvisionInfo | null
+}
+
+export interface OrderView {
+  id: number
+  order_no: string
+  client_id: number
+  client_username?: string
+  status: "Pending" | "Paid" | "Active" | "ProvisionFailed" | "Cancelled" | "Refunded"
+  status_text: string
+  amount: string
+  balance_used: string
+  pay_method: string
+  pay_time: string
+  cancel_time: string
+  remark: string
+  created_at: string
+  items: OrderItemView[]
+}
+
+export interface OrderAdminDetail extends OrderView {
+  transactions: BalanceTransactionView[]
+}
+
+export interface BalanceTransactionView {
+  id: number
+  type: "recharge_admin" | "consume" | "refund" | "adjust"
+  type_text: string
+  amount: string
+  balance_after: string
+  related_type: string
+  related_id: number
+  remark: string
+  admin_id: number | null
+  created_at: string
+}
+
+export interface ClientBalanceData {
+  credit: string
+  list: BalanceTransactionView[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** 会员端主机视图（我的主机；不含密码） */
+export interface ClientHostView {
+  id: number
+  upstream_host_id: number
+  product_id: number | null
+  product_name: string
+  domain: string
+  domain_status: string
+  dedicated_ip: string
+  assigned_ips: string
+  username: string
+  next_due_date: string
+  synced_at: string
+}
+
 export const api = {
+  /** 商城前台公开接口（免鉴权，批 3-β 契约 13.1） */
+  store: {
+    products: () => request<{ groups: StoreGroup[] }>("/store/products"),
+    productDetail: (id: number) => request<StoreProductDetail>(`/store/products/${id}`),
+  },
   install: {
     status: () => request<{ installed: boolean }>("/install/status"),
     dbtest: (body: DbTestRequest) =>
@@ -417,6 +551,33 @@ export const api = {
       body,
       scope: "client",
     }),
+    /** 余额与流水（批 3-β，契约 14.3） */
+    balance: (params?: { page?: number; page_size?: number }) =>
+      request<ClientBalanceData>("/client/balance", { query: params ?? {}, scope: "client" }),
+    /** 下单（单商品立即购买，契约 13.2） */
+    createOrder: (body: { product_id: number; cycle: string; qty: number }) =>
+      request<OrderView>("/client/orders", { method: "POST", body, scope: "client" }),
+    orders: (params?: { status?: string; page?: number; page_size?: number }) =>
+      request<{ list: OrderView[]; total: number }>("/client/orders", {
+        query: params ?? {},
+        scope: "client",
+      }),
+    orderDetail: (id: number) =>
+      request<OrderView>(`/client/orders/${id}`, { scope: "client" }),
+    payOrder: (id: number, method: "balance" = "balance") =>
+      request<OrderView>(`/client/orders/${id}/pay`, {
+        method: "POST",
+        body: { method },
+        scope: "client",
+      }),
+    cancelOrder: (id: number) =>
+      request<OrderView>(`/client/orders/${id}/cancel`, { method: "POST", scope: "client" }),
+    /** 我的主机（契约 13.7） */
+    hosts: (params?: { page?: number; page_size?: number }) =>
+      request<{ list: ClientHostView[]; total: number }>("/client/hosts", {
+        query: params ?? {},
+        scope: "client",
+      }),
   },
   admin: {
     notify: {
@@ -443,8 +604,13 @@ export const api = {
     },
     upstream: {
       getConfig: () => request<UpstreamConfigData>("/admin/upstream/config"),
-      saveConfig: (body: { hostname: string; username: string; api_key: string }) =>
-        request<{ saved: boolean }>("/admin/upstream/config", { method: "PUT", body }),
+      saveConfig: (body: {
+        hostname: string
+        username: string
+        api_key: string
+        /** 本站对外地址（批 3-β；下游登记 downstream_url，可留空回退监听地址） */
+        site_url?: string
+      }) => request<{ saved: boolean }>("/admin/upstream/config", { method: "PUT", body }),
       test: () => request<UpstreamTestResult>("/admin/upstream/test", { method: "POST" }),
       credit: () =>
         request<{ credit: string; currency: UpstreamCurrency }>("/admin/upstream/credit"),
@@ -492,6 +658,25 @@ export const api = {
           body: { new_password: newPassword },
         }),
       remove: (id: number) => request<{ deleted: boolean }>(`/admin/clients/${id}`, { method: "DELETE" }),
+      /** 人工充值/扣款（批 3-β，契约 14.2；amount 带符号文本如 "+50.00"/"-20.00"） */
+      adjustBalance: (id: number, amount: string, remark: string) =>
+        request<{ client_id: number; credit: string; transaction: BalanceTransactionView }>(
+          `/admin/clients/${id}/balance`,
+          { method: "POST", body: { amount, remark } },
+        ),
+    },
+    /** 后台订单管理（批 3-β，契约 13.5） */
+    orders: {
+      list: (params?: { status?: string; keyword?: string; page?: number; page_size?: number }) =>
+        request<{ list: OrderView[]; total: number }>("/admin/orders", { query: params ?? {} }),
+      detail: (id: number) => request<OrderAdminDetail>(`/admin/orders/${id}`),
+      retryProvision: (id: number) =>
+        request<OrderView>(`/admin/orders/${id}/retry-provision`, { method: "POST" }),
+      cancelRefund: (id: number, remark?: string) =>
+        request<OrderView>(`/admin/orders/${id}/cancel-refund`, {
+          method: "POST",
+          body: { remark: remark ?? "" },
+        }),
     },
   },
 }

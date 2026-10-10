@@ -226,6 +226,8 @@ func (s *InstallService) Complete(ctx context.Context, req *InstallRequest) (*In
 	s.app.Upstream.Store(upstream.NewSessionManager(db,
 		time.Duration(newCfg.Upstream.TimeoutSeconds)*time.Second))
 	s.app.Installed.Store(true)
+	// 批 3-β：安装热切换后启动后台任务（开通转发 worker + 未支付超时清扫；幂等）
+	s.app.StartBackground()
 	slog.Info("安装完成，系统已切换为已安装态", "admin_id", admin.ID, "dbname", dbCfg.DBName, "mysql_version", version)
 
 	return &InstallResult{Installed: true, RestartRequired: false, AdminID: admin.ID}, nil

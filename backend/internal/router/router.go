@@ -40,6 +40,11 @@ func New(a *app.App) *gin.Engine {
 	hostSyncH := handler.NewHostSync(service.NewHostSync(a))
 	verifySvc := service.NewVerify(a)
 	clientH := handler.NewClient(service.NewClient(a, verifySvc), verifySvc)
+	// 批 3-β：商城/订单/余额 + 开通转发 worker（后台任务经 app.StartBackground 幂等启动）
+	provisionSvc := service.NewProvision(a)
+	a.SetBackgroundStarter(provisionSvc.Start)
+	orderH := handler.NewOrder(service.NewOrder(a, provisionSvc), service.NewStore(a))
+	balanceH := handler.NewBalance(service.NewBalance(a))
 
 	// ---- 公共接口（未安装态白名单，见契约文档 0.5） ----
 	r.GET("/api/healthz", healthH.Health)
@@ -56,6 +61,10 @@ func New(a *app.App) *gin.Engine {
 	r.POST("/api/client/auth/send-code", clientH.SendCode)
 	r.POST("/api/client/auth/register", clientH.Register)
 	r.POST("/api/client/auth/login", clientH.Login)
+
+	// ---- 商城前台·公开只读（批 3-β，契约 13.1；免鉴权可匿名浏览，受未安装门禁保护） ----
+	r.GET("/api/store/products", orderH.StoreProducts)
+	r.GET("/api/store/products/:id", orderH.StoreProductDetail)
 
 	// ---- 上游 → 下游主机推送（批 2，契约 9.6） ----
 	// 免 JWT（上游服务器调用），以魔方标准 MD5 签名验证代替登录态；
@@ -99,6 +108,15 @@ func New(a *app.App) *gin.Engine {
 		authed.PUT("/admin/clients/:id/status", clientH.AdminSetStatus)
 		authed.POST("/admin/clients/:id/reset-password", clientH.AdminResetPassword)
 		authed.DELETE("/admin/clients/:id", clientH.AdminDelete)
+
+		// 会员余额人工调账（批 3-β，契约 14.2）
+		authed.POST("/admin/clients/:id/balance", balanceH.AdminAdjust)
+
+		// 订单管理（批 3-β，契约 13.5）
+		authed.GET("/admin/orders", orderH.AdminListOrders)
+		authed.GET("/admin/orders/:id", orderH.AdminOrderDetail)
+		authed.POST("/admin/orders/:id/retry-provision", orderH.AdminRetryProvision)
+		authed.POST("/admin/orders/:id/cancel-refund", orderH.AdminCancelRefund)
 	}
 
 	// ---- 会员前台·需会员 JWT（issuer 隔离，管理员 token 无效） ----
@@ -107,6 +125,15 @@ func New(a *app.App) *gin.Engine {
 		clientAuthed.GET("/profile", clientH.Profile)
 		clientAuthed.PUT("/profile", clientH.UpdateProfile)
 		clientAuthed.POST("/change-password", clientH.ChangePassword)
+
+		// 批 3-β：订单/余额/主机（契约 13.2-13.4、13.7、14.3）
+		clientAuthed.POST("/orders", orderH.CreateOrder)
+		clientAuthed.GET("/orders", orderH.ListOrders)
+		clientAuthed.GET("/orders/:id", orderH.OrderDetail)
+		clientAuthed.POST("/orders/:id/pay", orderH.PayOrder)
+		clientAuthed.POST("/orders/:id/cancel", orderH.CancelOrder)
+		clientAuthed.GET("/hosts", orderH.ClientHosts)
+		clientAuthed.GET("/balance", balanceH.ClientBalance)
 	}
 
 	// ---- 静态资源与 404 ----

@@ -31,6 +31,11 @@ type App struct {
 	Upstream  atomic.Pointer[upstream.SessionManager] // 批 2：上游会话管理（settings 真源 + jwt 缓存复用）
 
 	installMu sync.Mutex // 安装互斥：防并发 complete 造成双写
+
+	// 批 3-β：后台任务（开通 worker/超时清扫）启动器。路由组装时注册，
+	// 启动（已安装态）与安装热切换后各调一次 StartBackground，sync.Once 保证只启动一次。
+	bgOnce  sync.Once
+	bgStart atomic.Pointer[func()]
 }
 
 // New 构造运行时容器，安装状态初值取自配置。
@@ -75,4 +80,19 @@ func (a *App) GetUpstream() *upstream.SessionManager {
 func (a *App) InstallLock() func() {
 	a.installMu.Lock()
 	return a.installMu.Unlock
+}
+
+// SetBackgroundStarter 注册后台任务启动器（路由组装期调用；只注册不启动）。
+func (a *App) SetBackgroundStarter(fn func()) {
+	a.bgStart.Store(&fn)
+}
+
+// StartBackground 启动后台任务（开通 worker + 超时清扫）。
+// sync.Once 保证进程内只启动一次：启动时（已安装态）与安装热切换后各调一次是安全的。
+func (a *App) StartBackground() {
+	p := a.bgStart.Load()
+	if p == nil {
+		return
+	}
+	a.bgOnce.Do(*p)
 }
